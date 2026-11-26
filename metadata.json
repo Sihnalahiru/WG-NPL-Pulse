@@ -1,0 +1,6 @@
+{
+  "name": "WG Visit & NPL Control System",
+  "description": "Leasing and finance recovery tracking dashboard for field visits, AERS master lookup, 91 DPD month-end countdowns, WhatsApp location sync, and monthly NPL trend analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
