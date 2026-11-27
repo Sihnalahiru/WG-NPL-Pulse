@@ -10,11 +10,9 @@ import {
   YAxis,
 } from 'recharts';
 import {
-  ClipboardPaste,
   Flame,
   RefreshCw,
   ShieldAlert,
-  Upload,
 } from 'lucide-react';
 import type {
   AersMetadata,
@@ -45,8 +43,8 @@ interface TrendsEvaluationPanelProps {
   mrpMap?: Map<string, MrpEnrichment>;
   openingBaseline: OpeningOfficerBaseline | null;
   isDark: boolean;
-  onUploadAersFile: (file: File) => void;
-  onPasteAersText: (rawText: string) => void;
+  onUploadAersFile?: (file: File) => void;
+  onPasteAersText?: (rawText: string) => void;
   onSetCurrentAsOpening: () => void;
   onOpenWorstRadar?: () => void;
   onOpenBorderlineCards?: () => void;
@@ -67,8 +65,6 @@ export function TrendsEvaluationPanel({
   mrpMap,
   openingBaseline,
   isDark,
-  onUploadAersFile,
-  onPasteAersText,
   onSetCurrentAsOpening,
   onOpenWorstRadar,
   onOpenBorderlineCards,
@@ -76,8 +72,6 @@ export function TrendsEvaluationPanel({
   const [scope, setScope] = useState<'tracked' | 'aers'>(
     aersRecords.length > 0 ? 'aers' : 'tracked',
   );
-  const [pasteText, setPasteText] = useState('');
-  const [showPasteBox, setShowPasteBox] = useState(false);
 
   const trackedNos = useMemo(
     () => new Set(trackedContracts.map((c) => normalizeContractNo(c.contractNo))),
@@ -174,13 +168,6 @@ export function TrendsEvaluationPanel({
   const tooltipBg = isDark ? '#0f172a' : '#ffffff';
   const tooltipBorder = isDark ? '#334155' : '#e2e8f0';
 
-  const handleApplyPaste = () => {
-    if (!pasteText.trim()) return;
-    onPasteAersText(pasteText);
-    setPasteText('');
-    setShowPasteBox(false);
-  };
-
   return (
     <div className="space-y-6">
       {/* Daily Age Evaluation Auto-Sync Bar */}
@@ -191,7 +178,7 @@ export function TrendsEvaluationPanel({
               Daily Age Evaluation &amp; Borderline Risk Engine
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-              Paste your daily Age Evaluation rows directly from Excel or upload the AERS file. Age buckets, next-month borderline save targets, and per-officer Opening vs. Closing tables update automatically.
+              Age buckets, next-month borderline save targets, and per-officer Opening vs. Closing tables update automatically when you upload an AERS report.
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 dark:text-slate-300 tabular-nums">
               <span>
@@ -241,30 +228,6 @@ export function TrendsEvaluationPanel({
               </button>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setShowPasteBox((v) => !v)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap"
-            >
-              <ClipboardPaste className="w-3.5 h-3.5" />
-              Paste Daily AERS
-            </button>
-
-            <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap">
-              <Upload className="w-3.5 h-3.5" />
-              Upload Excel
-              <input
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) onUploadAersFile(file);
-                  e.target.value = '';
-                }}
-              />
-            </label>
-
             {aersRecords.length > 0 && (
               <button
                 type="button"
@@ -278,53 +241,6 @@ export function TrendsEvaluationPanel({
             )}
           </div>
         </div>
-
-        {showPasteBox && (
-          <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                Paste copied Excel rows (Age Evaluation Report Sub - with or without Row 1–3 headers)
-              </label>
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                Supports tab-separated Excel copy-paste or CSV
-              </span>
-            </div>
-            <textarea
-              rows={5}
-              value={pasteText}
-              onChange={(e) => setPasteText(e.target.value)}
-              onPaste={(e) => {
-                const pasted = e.clipboardData.getData('text');
-                if (pasted && pasted.includes('\n') && pasted.includes('\t')) {
-                  setPasteText(pasted);
-                  e.preventDefault();
-                }
-              }}
-              placeholder="Select rows in your daily AERS Excel sheet, press Ctrl+C, and Ctrl+V here..."
-              className="w-full p-3 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
-            />
-            <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setPasteText('');
-                  setShowPasteBox(false);
-                }}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleApplyPaste}
-                disabled={!pasteText.trim()}
-                className="px-4 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-              >
-                Process &amp; Update Evaluation
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* DPD Age Bucket Distribution Bar Chart + Next-Month Borderline Summary */}
@@ -347,7 +263,7 @@ export function TrendsEvaluationPanel({
           {evaluableItems.length === 0 ? (
             <div className="h-64 flex flex-col items-center justify-center text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-lg px-4">
               <FinancePortfolioIllustration className="w-44 h-auto mb-2" />
-              No contracts to display yet. Paste or upload an Age Evaluation report or add tracked contracts.
+              No contracts to display yet. Upload an Age Evaluation report or add tracked contracts.
             </div>
           ) : (
             <>
@@ -581,7 +497,7 @@ export function TrendsEvaluationPanel({
 
         {officerRows.length === 0 ? (
           <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
-            No officer evaluation data yet. Paste or upload an Age Evaluation report to generate Opening vs. Closing per officer.
+            No officer evaluation data yet. Upload an Age Evaluation report to generate Opening vs. Closing per officer.
           </div>
         ) : (
           <div className="overflow-x-auto">
