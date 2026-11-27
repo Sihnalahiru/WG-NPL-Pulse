@@ -96,15 +96,56 @@ const STORAGE_KEYS = {
   THEME: 'wg_v2_theme',
 };
 
-function readArrayStorage<T>(key: string): T[] {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as T[]) : [];
-  } catch {
-    return [];
+function sanitizeAersList(raw: unknown): AersRecord[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is AersRecord => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+    .map((r) => ({
+      ...r,
+      contractNo: typeof r.contractNo === 'string' ? r.contractNo : String(r.contractNo ?? ''),
+      cusName: typeof r.cusName === 'string' ? r.cusName : '',
+      officeType: typeof r.officeType === 'string' ? r.officeType : '',
+      marketingOfficer: typeof r.marketingOfficer === 'string' ? r.marketingOfficer : '',
+      recoveryOfficer: typeof r.recoveryOfficer === 'string' ? r.recoveryOfficer : '',
+      nplReason: typeof r.nplReason === 'string' ? r.nplReason : '',
+      worstCaseProduct: typeof r.worstCaseProduct === 'string' ? r.worstCaseProduct : '',
+    }))
+    .filter((r) => r.contractNo.trim().length > 0);
+}
+
+function sanitizeTrackedList(raw: unknown): TrackedContract[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is TrackedContract => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+    .map((c) => ({
+      ...c,
+      contractNo: typeof c.contractNo === 'string' ? c.contractNo : String(c.contractNo ?? ''),
+      cusName: typeof c.cusName === 'string' ? c.cusName : '',
+      visitHistory: Array.isArray(c.visitHistory) ? c.visitHistory : [],
+      mrp:
+        c.mrp && typeof c.mrp === 'object' && !Array.isArray(c.mrp)
+          ? {
+              ...c.mrp,
+              paymentPattern: Array.isArray(c.mrp.paymentPattern) ? c.mrp.paymentPattern : [],
+            }
+          : undefined,
+    }))
+    .filter((c) => c.contractNo.trim().length > 0);
+}
+
+function sanitizeMrpMap(raw: unknown): Map<string, MrpEnrichment> {
+  const map = new Map<string, MrpEnrichment>();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return map;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const obj = v as MrpEnrichment;
+      map.set(k, {
+        ...obj,
+        paymentPattern: Array.isArray(obj.paymentPattern) ? obj.paymentPattern : [],
+      });
+    }
   }
+  return map;
 }
 
 function readObjectStorage<T extends object>(key: string, fallback: T): T {
@@ -154,24 +195,47 @@ export default function App() {
     return false;
   });
 
-  const [aersRecords, setAersRecords] = useState<AersRecord[]>(() =>
-    readArrayStorage<AersRecord>(STORAGE_KEYS.AERS_MASTER),
-  );
+  const [aersRecords, setAersRecords] = useState<AersRecord[]>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.AERS_MASTER);
+      return raw ? sanitizeAersList(JSON.parse(raw)) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [aersMeta, setAersMeta] = useState<AersMetadata | null>(() =>
     readNullableObjectStorage<AersMetadata>(STORAGE_KEYS.AERS_META),
   );
+
   const [openingBaseline, setOpeningBaseline] =
     useState<OpeningOfficerBaseline | null>(() =>
       readNullableObjectStorage<OpeningOfficerBaseline>(
         STORAGE_KEYS.OPENING_BASELINE,
       ),
     );
-  const [trackedContracts, setTrackedContracts] = useState<TrackedContract[]>(
-    () => readArrayStorage<TrackedContract>(STORAGE_KEYS.TRACKED),
-  );
-  const [monthlySnapshots, setMonthlySnapshots] = useState<MonthlySnapshot[]>(
-    () => readArrayStorage<MonthlySnapshot>(STORAGE_KEYS.SNAPSHOTS),
-  );
+
+  const [trackedContracts, setTrackedContracts] = useState<TrackedContract[]>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.TRACKED);
+      return raw ? sanitizeTrackedList(JSON.parse(raw)) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [monthlySnapshots, setMonthlySnapshots] = useState<MonthlySnapshot[]>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.SNAPSHOTS);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((s) => s && typeof s === 'object' && !Array.isArray(s))
+        : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [notifPrefs, setNotifPrefs] = useState<NotificationPreferences>(() =>
     readObjectStorage<NotificationPreferences>(STORAGE_KEYS.NOTIF_PREFS, {
       enabled: true,
@@ -186,12 +250,14 @@ export default function App() {
   >('office_breakdown');
   const [settingsSubTab, setSettingsSubTab] = useState<'lookup' | 'backup'>('lookup');
   const [mrpMap, setMrpMap] = useState>(() => {
-    const rawObj = readObjectStorage<Record<string, MrpEnrichment>>(
-      STORAGE_KEYS.MRP_MAP,
-      {},
-    );
-    return new Map(Object.entries(rawObj));
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.MRP_MAP);
+      return raw ? sanitizeMrpMap(JSON.parse(raw)) : new Map();
+    } catch {
+      return new Map();
+    }
   });
+
   const [regularContractNos, setRegularContractNos] = useState<Set<string>>(() => new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterPreset>('all');
@@ -199,12 +265,10 @@ export default function App() {
   const [animKey, setAnimKey] = useState(0);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
 
-  // Admin session token kept in React memory
   const [adminToken, setAdminToken] = useState<string | null>(null);
   const [adminModalOpen, setAdminModalOpen] = useState(false);
   const isAdmin = Boolean(adminToken);
 
-  // Modals
   const [contractModalState, setContractModalState] = useState<{
     isOpen: boolean;
     mode: 'add' | 'edit' | 'log_visit';
@@ -236,38 +300,45 @@ export default function App() {
     [],
   );
 
-  // Pull shared live data from GitHub for ALL visitors so everyone sees the Admin's latest upload
+  // Pull shared live data from GitHub with full sanitization
   const syncFromLiveCloud = useCallback(
     async (silent = true) => {
       setIsSyncingCloud(true);
       try {
         const cloud = await fetchLiveCloudData();
-        if (cloud && Array.isArray(cloud.aersRecords)) {
-          setAersRecords(cloud.aersRecords);
-          if (cloud.aersMeta && typeof cloud.aersMeta === 'object') {
+        if (cloud && typeof cloud === 'object' && !Array.isArray(cloud)) {
+          const cleanAers = sanitizeAersList(cloud.aersRecords);
+          if (Array.isArray(cloud.aersRecords)) {
+            setAersRecords(cleanAers);
+          }
+          if (cloud.aersMeta && typeof cloud.aersMeta === 'object' && !Array.isArray(cloud.aersMeta)) {
             setAersMeta(cloud.aersMeta);
           }
-          if (
-            cloud.mrpMap &&
-            typeof cloud.mrpMap === 'object' &&
-            !Array.isArray(cloud.mrpMap)
-          ) {
-            setMrpMap(new Map(Object.entries(cloud.mrpMap)));
+          if (cloud.mrpMap !== undefined) {
+            setMrpMap(sanitizeMrpMap(cloud.mrpMap));
           }
-          if (cloud.openingBaseline && typeof cloud.openingBaseline === 'object') {
+          if (
+            cloud.openingBaseline &&
+            typeof cloud.openingBaseline === 'object' &&
+            !Array.isArray(cloud.openingBaseline)
+          ) {
             setOpeningBaseline(cloud.openingBaseline);
           }
           if (Array.isArray(cloud.trackedContracts)) {
-            setTrackedContracts(cloud.trackedContracts);
+            setTrackedContracts(sanitizeTrackedList(cloud.trackedContracts));
           }
           if (Array.isArray(cloud.monthlySnapshots)) {
-            setMonthlySnapshots(cloud.monthlySnapshots);
+            setMonthlySnapshots(
+              cloud.monthlySnapshots.filter(
+                (s) => s && typeof s === 'object' && !Array.isArray(s),
+              ),
+            );
           }
           setAnimKey((k) => k + 1);
           if (!silent) {
             showToast(
               'Live Data Refreshed',
-              `Loaded ${cloud.aersRecords.length.toLocaleString()} accounts (${cloud.aersMeta?.printedDateTime || cloud.updatedAt}).`,
+              `Loaded ${cleanAers.length.toLocaleString()} accounts (${cloud.aersMeta?.printedDateTime || cloud.updatedAt || 'Latest'}).`,
               'success',
             );
           }
@@ -297,7 +368,6 @@ export default function App() {
     syncFromLiveCloud(true);
   }, [syncFromLiveCloud]);
 
-  // Helper to push Admin updates live to GitHub so all users see them immediately
   const pushToLiveCloudIfConfigured = async (override?: {
     aersRecords?: AersRecord[];
     aersMeta?: AersMetadata | null;
@@ -333,7 +403,6 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // Sync theme to <html>
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDark);
     try {
@@ -343,7 +412,6 @@ export default function App() {
     }
   }, [isDark]);
 
-  // Remove legacy duplicate storage keys
   useEffect(() => {
     try {
       localStorage.removeItem('wg_v2_opening_master');
@@ -359,7 +427,6 @@ export default function App() {
     }
   }, []);
 
-  // Persist domain state to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -425,7 +492,6 @@ export default function App() {
     }
   }, [notifPrefs]);
 
-  // Filtered subsets when an RO / MO card or selector is chosen
   const visibleAersRecords = useMemo(() => {
     const safeAers = Array.isArray(aersRecords) ? aersRecords : [];
     if (selectedOfficer === 'ALL') return safeAers;
@@ -438,7 +504,6 @@ export default function App() {
     return safeTracked.filter((c) => getOfficerByOfficeType(c) === selectedOfficer);
   }, [trackedContracts, selectedOfficer]);
 
-  // Lookup indices & unified strategy metrics
   const aersMap = useMemo(() => {
     const map = new Map<string, AersRecord>();
     if (Array.isArray(aersRecords)) {
@@ -950,12 +1015,12 @@ export default function App() {
       if (!Array.isArray(parsed.trackedContracts)) {
         throw new Error('Invalid backup file: missing trackedContracts.');
       }
-      setTrackedContracts(parsed.trackedContracts);
+      setTrackedContracts(sanitizeTrackedList(parsed.trackedContracts));
       if (Array.isArray(parsed.monthlySnapshots)) {
         setMonthlySnapshots(parsed.monthlySnapshots);
       }
       if (Array.isArray(parsed.aersMasterList)) {
-        setAersRecords(parsed.aersMasterList);
+        setAersRecords(sanitizeAersList(parsed.aersMasterList));
       }
       if (parsed.aersMeta !== undefined) {
         setAersMeta(parsed.aersMeta);
@@ -1478,7 +1543,6 @@ export default function App() {
                       </button>
                     </div>
 
-                    {/* Action Bar: Admin-Only Upload/Add + Public Navigation */}
                     <div className="flex flex-wrap items-center gap-2.5 pt-2">
                       {isAdmin ? (
                         <>
@@ -1559,7 +1623,6 @@ export default function App() {
                 </div>
               </section>
 
-              {/* Creative Top Section Hub: RO/MO Profile Cards + Bulk Effort Monitor + Campaign + AI Variance */}
               <ExecutiveOfficerHubPanel
                 aersRecords={aersRecords}
                 aersMeta={aersMeta}
