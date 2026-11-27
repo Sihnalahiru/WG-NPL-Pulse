@@ -22,14 +22,12 @@ export default defineConfig(() => {
           }
           const distDir = path.resolve(__dirname, 'dist');
           
-          // Copy src/assets
           const srcAssets = path.resolve(__dirname, 'src/assets');
           const distAssets = path.resolve(distDir, 'src/assets');
           if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
             fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
           }
 
-          // Copy images folder (including images/user)
           const rootImages = path.resolve(__dirname, 'images');
           const distImages = path.resolve(distDir, 'images');
           if (fs.existsSync(distDir) && fs.existsSync(rootImages)) {
