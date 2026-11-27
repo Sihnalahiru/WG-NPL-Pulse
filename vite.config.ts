@@ -13,20 +13,27 @@ export default defineConfig(() => {
     plugins: [
       react(),
       tailwindcss(),
-      // Copies src/assets into dist/ so generated and imported assets remain available
-      // when the app is deployed from a GitHub Pages subdirectory.
       {
-        name: 'copy-unbundled-src-assets',
+        name: 'copy-unbundled-assets',
         apply: 'build',
         closeBundle(error?: Error): void {
           if (error) {
             return;
           }
           const distDir = path.resolve(__dirname, 'dist');
+          
+          // Copy src/assets
           const srcAssets = path.resolve(__dirname, 'src/assets');
           const distAssets = path.resolve(distDir, 'src/assets');
           if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
             fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
+          }
+
+          // Copy images folder (including images/user)
+          const rootImages = path.resolve(__dirname, 'images');
+          const distImages = path.resolve(distDir, 'images');
+          if (fs.existsSync(distDir) && fs.existsSync(rootImages)) {
+            fs.cpSync(rootImages, distImages, {recursive: true, force: true});
           }
         },
       },
@@ -37,10 +44,7 @@ export default defineConfig(() => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };
