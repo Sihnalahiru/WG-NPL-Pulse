@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   BarChart3,
@@ -176,6 +176,39 @@ function readNullableObjectStorage<T extends object>(key: string): T | null {
   }
 }
 
+// Local isolation boundary so a child panel error NEVER crashes the entire app
+class SectionSafeBoundary extends React.Component<
+  { name: string; children: React.ReactNode },
+  { errorMsg: string | null }
+> {
+  constructor(props: { name: string; children: React.ReactNode }) {
+    super(props);
+    this.state = { errorMsg: null };
+  }
+  static getDerivedStateFromError(err: Error) {
+    return { errorMsg: err?.message || String(err) };
+  }
+  render() {
+    if (this.state.errorMsg) {
+      return (
+        <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 flex items-center justify-between gap-3">
+          <span>
+            <strong>{this.props.name}:</strong> {this.state.errorMsg}
+          </span>
+          <button
+            type="button"
+            onClick={() => this.setState({ errorMsg: null })}
+            className="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-semibold"
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 interface ToastBanner {
   id: number;
   title: string;
@@ -300,7 +333,6 @@ export default function App() {
     [],
   );
 
-  // Pull shared live data from GitHub with full sanitization
   const syncFromLiveCloud = useCallback(
     async (silent = true) => {
       setIsSyncingCloud(true);
@@ -508,7 +540,7 @@ export default function App() {
     const map = new Map<string, AersRecord>();
     if (Array.isArray(aersRecords)) {
       aersRecords.forEach((r) => {
-        if (r && r.contractNo) {
+        if (r && typeof r.contractNo === 'string') {
           map.set(normalizeContractNo(r.contractNo), r);
         }
       });
@@ -520,43 +552,73 @@ export default function App() {
     if (!Array.isArray(trackedContracts)) return new Set<string>();
     return new Set(
       trackedContracts
-        .filter((c) => c && c.contractNo)
+        .filter((c) => c && typeof c.contractNo === 'string')
         .map((c) => normalizeContractNo(c.contractNo)),
     );
   }, [trackedContracts]);
 
   const strategySummary = useMemo(() => {
-    const items =
-      visibleAersRecords.length > 0
-        ? normalizeEvaluableFromAers(visibleAersRecords, trackedContractNos, mrpMap)
-        : normalizeEvaluableFromTracked(visibleTrackedContracts);
-    const offices = computeOfficeTypeBreakdown(items);
-    const borderline = analyzeNextMonthBorderline(items);
-    const worstTotal = items.filter((i) => i.isWorst).length;
-    return {
-      officeTypesCount: offices.length,
-      borderlineCount: borderline.totalCount,
-      borderlineMinToSave: borderline.totalMinToSave,
-      borderlineEfforts: borderline.totalBorderlineEfforts,
-      worstCount: worstTotal,
-    };
+    try {
+      const items =
+        visibleAersRecords.length > 0
+          ? normalizeEvaluableFromAers(visibleAersRecords, trackedContractNos, mrpMap)
+          : normalizeEvaluableFromTracked(visibleTrackedContracts);
+      const safeItems = Array.isArray(items) ? items : [];
+      const offices = computeOfficeTypeBreakdown(safeItems);
+      const safeOffices = Array.isArray(offices) ? offices : [];
+      const borderline = analyzeNextMonthBorderline(safeItems);
+      const worstTotal = safeItems.filter((i) => i && i.isWorst).length;
+      return {
+        officeTypesCount: safeOffices.length,
+        borderlineCount: Number(borderline?.totalCount) || 0,
+        borderlineMinToSave: Number(borderline?.totalMinToSave) || 0,
+        borderlineEfforts: Number(borderline?.totalBorderlineEfforts) || 0,
+        worstCount: worstTotal,
+      };
+    } catch {
+      return {
+        officeTypesCount: 0,
+        borderlineCount: 0,
+        borderlineMinToSave: 0,
+        borderlineEfforts: 0,
+        worstCount: 0,
+      };
+    }
   }, [visibleAersRecords, visibleTrackedContracts, trackedContractNos, mrpMap]);
 
   const worstCount = useMemo(() => {
-    if (visibleAersRecords.length > 0) {
-      return visibleAersRecords.filter((r) =>
-        isWorstCategory(r.nplReason, r.worstCaseProduct),
+    try {
+      if (visibleAersRecords.length > 0) {
+        return visibleAersRecords.filter((r) =>
+          isWorstCategory(r.nplReason, r.worstCaseProduct),
+        ).length;
+      }
+      return visibleTrackedContracts.filter((c) =>
+        isWorstCategory(c.nplReason, c.worstCaseProduct),
       ).length;
+    } catch {
+      return 0;
     }
-    return visibleTrackedContracts.filter((c) =>
-      isWorstCategory(c.nplReason, c.worstCaseProduct),
-    ).length;
   }, [visibleAersRecords, visibleTrackedContracts]);
 
-  const alertDigest = useMemo(
-    () => buildRecoveryAlertDigest(visibleTrackedContracts),
-    [visibleTrackedContracts],
-  );
+  const alertDigest = useMemo(() => {
+    try {
+      const d = buildRecoveryAlertDigest(visibleTrackedContracts);
+      return {
+        todayPp: Array.isArray(d?.todayPp) ? d.todayPp : [],
+        brokenPp: Array.isArray(d?.brokenPp) ? d.brokenPp : [],
+        dpd91Danger: Array.isArray(d?.dpd91Danger) ? d.dpd91Danger : [],
+        pendingHandOver: Array.isArray(d?.pendingHandOver) ? d.pendingHandOver : [],
+      };
+    } catch {
+      return {
+        todayPp: [],
+        brokenPp: [],
+        dpd91Danger: [],
+        pendingHandOver: [],
+      };
+    }
+  }, [visibleTrackedContracts]);
 
   const urgentAlertsCount =
     alertDigest.todayPp.length +
@@ -1259,7 +1321,7 @@ export default function App() {
           })}
         </nav>
 
-        {/* Right Zone: Admin-Only Upload/Add + Live Refresh */}
+        {/* Right Zone */}
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
@@ -1623,92 +1685,102 @@ export default function App() {
                 </div>
               </section>
 
-              <ExecutiveOfficerHubPanel
-                aersRecords={aersRecords}
-                aersMeta={aersMeta}
-                trackedContracts={trackedContracts}
-                mrpMap={mrpMap}
-                openingBaseline={openingBaseline}
-                monthlySnapshots={monthlySnapshots}
-                selectedOfficer={selectedOfficer}
-                onSelectOfficer={setSelectedOfficer}
-                onAddFromMaster={handleAddFromMaster}
-              />
+              <SectionSafeBoundary name="Executive Officer Hub">
+                <ExecutiveOfficerHubPanel
+                  aersRecords={aersRecords}
+                  aersMeta={aersMeta}
+                  trackedContracts={trackedContracts}
+                  mrpMap={mrpMap}
+                  openingBaseline={openingBaseline}
+                  monthlySnapshots={monthlySnapshots}
+                  selectedOfficer={selectedOfficer}
+                  onSelectOfficer={setSelectedOfficer}
+                  onAddFromMaster={handleAddFromMaster}
+                />
+              </SectionSafeBoundary>
 
-              <KpiStrip
-                contracts={visibleTrackedContracts}
-                aersRecords={visibleAersRecords}
-                mrpMap={mrpMap}
-                animKey={animKey}
-              />
+              <SectionSafeBoundary name="KPI Strip">
+                <KpiStrip
+                  contracts={visibleTrackedContracts}
+                  aersRecords={visibleAersRecords}
+                  mrpMap={mrpMap}
+                  animKey={animKey}
+                />
+              </SectionSafeBoundary>
 
-              <TrendsEvaluationPanel
-                trackedContracts={visibleTrackedContracts}
-                aersRecords={visibleAersRecords}
-                aersMeta={aersMeta}
-                mrpMap={mrpMap}
-                openingBaseline={openingBaseline}
-                isDark={isDark}
-                onUploadAersFile={handleUploadAersFile}
-                onPasteAersText={handlePasteAersText}
-                onSetCurrentAsOpening={handleSetCurrentAsOpening}
-                onOpenWorstRadar={() => setActiveNav('worst')}
-                onOpenBorderlineCards={() => setActiveNav('borderline')}
-              />
+              <SectionSafeBoundary name="Trends Evaluation">
+                <TrendsEvaluationPanel
+                  trackedContracts={visibleTrackedContracts}
+                  aersRecords={visibleAersRecords}
+                  aersMeta={aersMeta}
+                  mrpMap={mrpMap}
+                  openingBaseline={openingBaseline}
+                  isDark={isDark}
+                  onUploadAersFile={handleUploadAersFile}
+                  onPasteAersText={handlePasteAersText}
+                  onSetCurrentAsOpening={handleSetCurrentAsOpening}
+                  onOpenWorstRadar={() => setActiveNav('worst')}
+                  onOpenBorderlineCards={() => setActiveNav('borderline')}
+                />
+              </SectionSafeBoundary>
 
-              <TrackingTable
-                contracts={visibleTrackedContracts}
-                mrpMap={mrpMap}
-                searchQuery={searchQuery}
-                onSearchChange={setSearchQuery}
-                activeFilter={activeFilter}
-                onFilterChange={setActiveFilter}
-                onLogVisit={(c) =>
-                  setContractModalState({
-                    isOpen: true,
-                    mode: 'log_visit',
-                    contract: c,
-                  })
-                }
-                onEditContract={(c) =>
-                  setContractModalState({
-                    isOpen: true,
-                    mode: 'edit',
-                    contract: c,
-                  })
-                }
-                onViewHistory={(c) => setHistoryContract(c)}
-                onRemoveContract={handleRemoveContract}
-                onOpenAddModal={() =>
-                  setContractModalState({
-                    isOpen: true,
-                    mode: 'add',
-                    contract: null,
-                  })
-                }
-              />
+              <SectionSafeBoundary name="Tracking Table">
+                <TrackingTable
+                  contracts={visibleTrackedContracts}
+                  mrpMap={mrpMap}
+                  searchQuery={searchQuery}
+                  onSearchChange={setSearchQuery}
+                  activeFilter={activeFilter}
+                  onFilterChange={setActiveFilter}
+                  onLogVisit={(c) =>
+                    setContractModalState({
+                      isOpen: true,
+                      mode: 'log_visit',
+                      contract: c,
+                    })
+                  }
+                  onEditContract={(c) =>
+                    setContractModalState({
+                      isOpen: true,
+                      mode: 'edit',
+                      contract: c,
+                    })
+                  }
+                  onViewHistory={(c) => setHistoryContract(c)}
+                  onRemoveContract={handleRemoveContract}
+                  onOpenAddModal={() =>
+                    setContractModalState({
+                      isOpen: true,
+                      mode: 'add',
+                      contract: null,
+                    })
+                  }
+                />
+              </SectionSafeBoundary>
 
-              <AnalyticsCharts
-                contracts={visibleTrackedContracts}
-                aersRecords={visibleAersRecords}
-                snapshots={monthlySnapshots}
-                isDark={isDark}
-                showSnapshotLedger={true}
-                animKey={animKey}
-                onAddSnapshot={(s) =>
-                  setMonthlySnapshots((prev) => [...prev, s])
-                }
-                onUpdateSnapshot={(s) =>
-                  setMonthlySnapshots((prev) =>
-                    prev.map((x) => (x.id === s.id ? s : x)),
-                  )
-                }
-                onDeleteSnapshot={(id) =>
-                  setMonthlySnapshots((prev) =>
-                    prev.filter((x) => x.id !== id),
-                  )
-                }
-              />
+              <SectionSafeBoundary name="Analytics Charts">
+                <AnalyticsCharts
+                  contracts={visibleTrackedContracts}
+                  aersRecords={visibleAersRecords}
+                  snapshots={monthlySnapshots}
+                  isDark={isDark}
+                  showSnapshotLedger={true}
+                  animKey={animKey}
+                  onAddSnapshot={(s) =>
+                    setMonthlySnapshots((prev) => [...prev, s])
+                  }
+                  onUpdateSnapshot={(s) =>
+                    setMonthlySnapshots((prev) =>
+                      prev.map((x) => (x.id === s.id ? s : x)),
+                    )
+                  }
+                  onDeleteSnapshot={(id) =>
+                    setMonthlySnapshots((prev) =>
+                      prev.filter((x) => x.id !== id),
+                    )
+                  }
+                />
+              </SectionSafeBoundary>
             </>
           )}
 
