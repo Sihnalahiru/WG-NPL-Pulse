@@ -6,7 +6,11 @@ interface UserAvatarProps {
 }
 
 export function UserAvatar({ name, sizeClass = 'w-8 h-8 text-xs' }: UserAvatarProps) {
-  const cleanName = (name || '').trim();
+  // Strip any leading "RO:" or "MO:" prefix (e.g. "RO: Lahiru" -> "Lahiru")
+  const cleanName = (name || '')
+    .replace(/^(ro|mo)\s*:\s*/i, '')
+    .trim();
+
   const extensions = ['jpg', 'png', 'jpeg', 'webp'];
   const [extIndex, setExtIndex] = useState(0);
   const [failed, setFailed] = useState(false);
@@ -24,7 +28,7 @@ export function UserAvatar({ name, sizeClass = 'w-8 h-8 text-xs' }: UserAvatarPr
         .join('')
     : '?';
 
-  if (!cleanName || failed) {
+  if (!cleanName || failed || cleanName === '—') {
     return (
       <div
         className={`${sizeClass} rounded-full bg-emerald-600/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 font-bold flex items-center justify-center shrink-0 select-none`}
