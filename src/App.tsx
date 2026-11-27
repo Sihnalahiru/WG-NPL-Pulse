@@ -282,12 +282,12 @@ export default function App() {
     'office_breakdown' | 'bm_analytics' | 'ai' | 'alerts'
   >('office_breakdown');
   const [settingsSubTab, setSettingsSubTab] = useState<'lookup' | 'backup'>('lookup');
-  const [mrpMap, setMrpMap] = useState>(() => {
+  const [mrpMap, setMrpMap] = useState<Map<string, MrpEnrichment>>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.MRP_MAP);
-      return raw ? sanitizeMrpMap(JSON.parse(raw)) : new Map();
+      return raw ? sanitizeMrpMap(JSON.parse(raw)) : new Map<string, MrpEnrichment>();
     } catch {
-      return new Map();
+      return new Map<string, MrpEnrichment>();
     }
   });
 

@@ -18,8 +18,11 @@ import type {
   AersRecord,
   MonthlySnapshot,
   MrpEnrichment,
+  MrpPaymentMonth,
+  OfficerEvaluationRow,
   OpeningOfficerBaseline,
   TrackedContract,
+  VisitLogEntry,
 } from '../types/recovery';
 import {
   CAMPAIGN_MONTHS,
@@ -32,6 +35,7 @@ import {
   normalizeEvaluableFromAers,
   normalizeEvaluableFromTracked,
 } from '../utils/recoveryEngine';
+import type { EvaluableAccount } from '../utils/recoveryEngine';
 import { UserAvatar } from './UserAvatar';
 
 interface ExecutiveOfficerHubPanelProps {
@@ -105,7 +109,7 @@ export function ExecutiveOfficerHubPanel({
         ro: asStr(c.ro),
         nplReason: asStr(c.nplReason),
         worstCaseProduct: asStr(c.worstCaseProduct),
-        visitHistory: asArray(c.visitHistory),
+        visitHistory: asArray<VisitLogEntry>(c.visitHistory),
       }))
       .filter((c) => c.contractNo.length > 0);
   }, [trackedContracts]);
@@ -125,7 +129,7 @@ export function ExecutiveOfficerHubPanel({
         if (typeof k === 'string' && v && typeof v === 'object' && !Array.isArray(v)) {
           out.set(k, {
             ...v,
-            paymentPattern: asArray(v.paymentPattern),
+            paymentPattern: asArray<MrpPaymentMonth>(v.paymentPattern),
           });
         }
       });
@@ -137,21 +141,21 @@ export function ExecutiveOfficerHubPanel({
     if (!openingBaseline || typeof openingBaseline !== 'object' || Array.isArray(openingBaseline)) {
       return null;
     }
-    const cleanOfficers: OpeningOfficerBaseline['officers'] = {};
+    const cleanByOfficer: OpeningOfficerBaseline['byOfficer'] = {};
     if (
-      openingBaseline.officers &&
-      typeof openingBaseline.officers === 'object' &&
-      !Array.isArray(openingBaseline.officers)
+      openingBaseline.byOfficer &&
+      typeof openingBaseline.byOfficer === 'object' &&
+      !Array.isArray(openingBaseline.byOfficer)
     ) {
-      for (const [k, v] of Object.entries(openingBaseline.officers)) {
+      for (const [k, v] of Object.entries(openingBaseline.byOfficer)) {
         if (v && typeof v === 'object' && !Array.isArray(v)) {
-          cleanOfficers[k] = v;
+          cleanByOfficer[k] = v;
         }
       }
     }
     return {
       ...openingBaseline,
-      officers: cleanOfficers,
+      byOfficer: cleanByOfficer,
     };
   }, [openingBaseline]);
 
@@ -160,21 +164,23 @@ export function ExecutiveOfficerHubPanel({
     [safeTracked],
   );
 
-  const evaluableItems = useMemo(() => {
+  const evaluableItems = useMemo<EvaluableAccount[]>(() => {
     try {
       const raw =
         safeAers.length > 0
           ? normalizeEvaluableFromAers(safeAers, trackedSet, safeMrpMap)
           : normalizeEvaluableFromTracked(safeTracked);
-      return asArray(raw);
+      return asArray<EvaluableAccount>(raw);
     } catch {
       return [];
     }
   }, [safeAers, safeTracked, trackedSet, safeMrpMap]);
 
-  const officerRows = useMemo(() => {
+  const officerRows = useMemo<OfficerEvaluationRow[]>(() => {
     try {
-      return asArray(computeOfficerOpeningClosing(evaluableItems, safeBaseline));
+      return asArray<OfficerEvaluationRow>(
+        computeOfficerOpeningClosing(evaluableItems, safeBaseline),
+      );
     } catch {
       return [];
     }
