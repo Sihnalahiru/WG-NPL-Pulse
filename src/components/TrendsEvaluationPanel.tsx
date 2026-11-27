@@ -36,6 +36,7 @@ import {
 } from '../utils/recoveryEngine';
 import { FinancePortfolioIllustration } from './FinanceIllustrations';
 import { OfficerEffortSummaryPanel } from './OfficerEffortSummaryPanel';
+import { UserAvatar } from './UserAvatar';
 
 interface TrendsEvaluationPanelProps {
   trackedContracts: TrackedContract[];
@@ -295,7 +296,6 @@ export function TrendsEvaluationPanel({
               onPaste={(e) => {
                 const pasted = e.clipboardData.getData('text');
                 if (pasted && pasted.includes('\n') && pasted.includes('\t')) {
-                  // Let user review or apply immediately; populate cleanly
                   setPasteText(pasted);
                   e.preventDefault();
                 }
@@ -613,10 +613,15 @@ export function TrendsEvaluationPanel({
                       className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40"
                     >
                       <td className="py-2.5 px-4 font-semibold text-slate-900 dark:text-slate-100">
-                        {row.officer}
-                        <span className="block text-[10px] font-normal text-slate-500 dark:text-slate-400">
-                          {row.openingCount} open · {row.closingCount} close
-                        </span>
+                        <div className="flex items-center gap-2.5">
+                          <UserAvatar name={row.officer} sizeClass="w-7 h-7 text-[10px]" />
+                          <div>
+                            <span>{row.officer}</span>
+                            <span className="block text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                              {row.openingCount} open · {row.closingCount} close
+                            </span>
+                          </div>
+                        </div>
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-900 dark:text-slate-100">
                         {formatCurrencyRs(row.openingNpl)}
