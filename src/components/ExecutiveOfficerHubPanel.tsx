@@ -67,12 +67,13 @@ export function ExecutiveOfficerHubPanel({
   const safeAers = Array.isArray(aersRecords) ? aersRecords : [];
   const safeTracked = Array.isArray(trackedContracts) ? trackedContracts : [];
   const safeSnapshots = Array.isArray(monthlySnapshots) ? monthlySnapshots : [];
+  const safeMrpMap = mrpMap instanceof Map ? mrpMap : new Map<string, MrpEnrichment>();
 
   const trackedSet = useMemo(
     () =>
       new Set(
         safeTracked
-          .filter((c) => c && c.contractNo)
+          .filter((c) => c && typeof c === 'object' && typeof c.contractNo === 'string')
           .map((c) => normalizeContractNo(c.contractNo)),
       ),
     [safeTracked],
@@ -80,9 +81,9 @@ export function ExecutiveOfficerHubPanel({
 
   const evaluableItems = useMemo(() => {
     return safeAers.length > 0
-      ? normalizeEvaluableFromAers(safeAers, trackedSet, mrpMap)
+      ? normalizeEvaluableFromAers(safeAers, trackedSet, safeMrpMap)
       : normalizeEvaluableFromTracked(safeTracked);
-  }, [safeAers, safeTracked, trackedSet, mrpMap]);
+  }, [safeAers, safeTracked, trackedSet, safeMrpMap]);
 
   const officerRows = useMemo(
     () => computeOfficerOpeningClosing(evaluableItems, openingBaseline),
@@ -142,7 +143,7 @@ export function ExecutiveOfficerHubPanel({
   const monitoredContracts = useMemo(() => {
     const aersByNo = new Map<string, AersRecord>();
     safeAers.forEach((r) => {
-      if (r && r.contractNo) {
+      if (r && typeof r.contractNo === 'string') {
         aersByNo.set(normalizeContractNo(r.contractNo), r);
       }
     });
@@ -153,7 +154,7 @@ export function ExecutiveOfficerHubPanel({
         const tracked = safeTracked.find(
           (c) => normalizeContractNo(c.contractNo) === tok,
         );
-        const mrp = mrpMap?.get(tok) ?? tracked?.mrp;
+        const mrp = safeMrpMap.get(tok) ?? tracked?.mrp;
         const efforts =
           aers?.assignOfficerEfforts ?? tracked?.assignOfficerEfforts ?? 0;
         const totalEff = aers?.totalEfforts ?? tracked?.totalEfforts ?? 0;
@@ -182,7 +183,7 @@ export function ExecutiveOfficerHubPanel({
           totalEff,
           progressPct,
           hasCallOrVisit:
-            efforts > 0 || (tracked?.visitHistory?.length ?? 0) > 0,
+            efforts > 0 || (Array.isArray(tracked?.visitHistory) && tracked.visitHistory.length > 0),
           isTracked: Boolean(tracked),
           aersRecord: aers,
           notPaidSummary: mrp?.notPaidSummary || '',
@@ -202,7 +203,7 @@ export function ExecutiveOfficerHubPanel({
       const tracked = safeTracked.find(
         (c) => normalizeContractNo(c.contractNo) === tok,
       );
-      const mrp = mrpMap?.get(tok) ?? tracked?.mrp;
+      const mrp = safeMrpMap.get(tok) ?? tracked?.mrp;
       const efforts = aers.assignOfficerEfforts || 0;
       const progressPct = Math.min(100, Math.round((efforts / 3) * 100));
       return {
@@ -218,13 +219,13 @@ export function ExecutiveOfficerHubPanel({
         totalEff: aers.totalEfforts || 0,
         progressPct,
         hasCallOrVisit:
-          efforts > 0 || (tracked?.visitHistory?.length ?? 0) > 0,
+          efforts > 0 || (Array.isArray(tracked?.visitHistory) && tracked.visitHistory.length > 0),
         isTracked: Boolean(tracked),
         aersRecord: aers,
         notPaidSummary: mrp?.notPaidSummary || '',
       };
     });
-  }, [bulkTokens, safeAers, safeTracked, mrpMap, selectedOfficer]);
+  }, [bulkTokens, safeAers, safeTracked, safeMrpMap, selectedOfficer]);
 
   const aiVarianceInsights = useMemo(() => {
     const activeCard =
