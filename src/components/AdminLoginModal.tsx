@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Lock, ShieldCheck, Trash2, X } from 'lucide-react';
+import { CheckCircle2, CloudUpload, KeyRound, Lock, ShieldCheck, Trash2, X } from 'lucide-react';
 import { SecurityVaultIllustration } from './FinanceIllustrations';
+import { getSavedGithubToken, saveGithubToken } from '../utils/githubSync';
 
 interface AdminLoginModalProps {
   isOpen: boolean;
@@ -9,7 +10,11 @@ interface AdminLoginModalProps {
   onLoginSuccess: (token: string) => void;
   onLogoutAdmin: () => void;
   onConfirmReset: () => Promise<void>;
+  onForcePublishNow?: () => Promise<void>;
 }
+
+// Change this passcode anytime if needed
+const ADMIN_PASSCODE = 'wgadmin2026';
 
 export function AdminLoginModal({
   isOpen,
@@ -18,8 +23,11 @@ export function AdminLoginModal({
   onLoginSuccess,
   onLogoutAdmin,
   onConfirmReset,
+  onForcePublishNow,
 }: AdminLoginModalProps) {
   const [password, setPassword] = useState('');
+  const [ghToken, setGhToken] = useState(() => getSavedGithubToken());
+  const [ghSavedFeedback, setGhSavedFeedback] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [confirmResetChecked, setConfirmResetChecked] = useState(false);
@@ -33,24 +41,63 @@ export function AdminLoginModal({
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch('/api/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: password.trim() }),
-      });
-      const data = (await res.json()) as {
-        authenticated?: boolean;
-        token?: string;
-        error?: string;
-      };
-      if (!res.ok || !data.authenticated || !data.token) {
-        throw new Error(data.error || 'Admin verification failed.');
+      const entered = password.trim();
+      // Try backend API first if running locally, otherwise verify client-side for GitHub Pages
+      let verifiedToken: string | null = null;
+      try {
+        const res = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: entered }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as {
+            authenticated?: boolean;
+            token?: string;
+          };
+          if (data.authenticated && data.token) {
+            verifiedToken = data.token;
+          }
+        }
+      } catch {
+        // Static GitHub Pages environment (no /api server)
       }
+
+      if (!verifiedToken) {
+        if (entered === ADMIN_PASSCODE) {
+          verifiedToken = `gh_pages_admin_${Date.now()}`;
+        } else {
+          throw new Error('Invalid Admin Password. Please try again.');
+        }
+      }
+
       setPassword('');
-      onLoginSuccess(data.token);
+      onLoginSuccess(verifiedToken);
     } catch (err) {
       setErrorMsg(
         err instanceof Error ? err.message : 'Unable to verify admin password.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveGhToken = () => {
+    saveGithubToken(ghToken);
+    setGhSavedFeedback(true);
+    setTimeout(() => setGhSavedFeedback(false), 3000);
+  };
+
+  const handlePublishClick = async () => {
+    if (!onForcePublishNow || loading) return;
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      saveGithubToken(ghToken);
+      await onForcePublishNow();
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : 'Live GitHub publish failed.',
       );
     } finally {
       setLoading(false);
@@ -81,7 +128,7 @@ export function AdminLoginModal({
       aria-modal="true"
       aria-labelledby="admin-modal-title"
     >
-      <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden">
+      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl">
         <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <SecurityVaultIllustration className="w-10 h-10 shrink-0" />
@@ -91,11 +138,11 @@ export function AdminLoginModal({
                 className="text-sm font-semibold text-slate-900 dark:text-slate-100"
               >
                 {isAdminAuthenticated
-                  ? 'WG Pulse Admin Control'
+                  ? 'WG Pulse Admin Control & Live Sync'
                   : 'Admin Log In Required'}
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Protected gateway for Total App Reset &amp; system wipe
+                Only Admin can upload AERS reports &amp; publish live data
               </p>
             </div>
           </div>
@@ -136,7 +183,7 @@ export function AdminLoginModal({
                   className="w-full px-3.5 py-2.5 text-sm font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
                 />
                 <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-                  Verified server-side before unlocking Total App Reset controls.
+                  Unlock Admin mode to upload daily AERS reports, edit watchlist contracts, and publish live updates to all users.
                 </p>
               </div>
 
@@ -163,7 +210,7 @@ export function AdminLoginModal({
               <div className="p-3.5 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 flex items-center justify-between gap-2 text-xs">
                 <span className="inline-flex items-center gap-2 font-medium text-emerald-800 dark:text-emerald-300">
                   <ShieldCheck className="w-4 h-4 shrink-0" />
-                  Admin Session Active (In-Memory)
+                  Admin Mode Active (Upload &amp; Edit Unlocked)
                 </span>
                 <button
                   type="button"
@@ -177,6 +224,51 @@ export function AdminLoginModal({
                 </button>
               </div>
 
+              {/* GitHub Live Cloud Sync Configuration */}
+              <div className="p-4 rounded-xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 space-y-3">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-900 dark:text-blue-200">
+                  <KeyRound className="w-3.5 h-3.5 text-blue-600" />
+                  GitHub Live Cloud Sync (Everyone View)
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                  Paste your GitHub Personal Access Token (with <code>repo</code> scope) once. Whenever you upload an AERS Excel file, it automatically publishes live to all users.
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="password"
+                    value={ghToken}
+                    onChange={(e) => setGhToken(e.target.value)}
+                    placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                    className="flex-1 px-3 py-1.5 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveGhToken}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 text-white hover:bg-slate-700 whitespace-nowrap"
+                  >
+                    Save Token
+                  </button>
+                </div>
+                {ghSavedFeedback && (
+                  <p className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+                    <CheckCircle2 className="w-3 h-3" />
+                    Token saved on this Admin browser.
+                  </p>
+                )}
+                {onForcePublishNow && ghToken.trim() && (
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={handlePublishClick}
+                    className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    <CloudUpload className="w-3.5 h-3.5" />
+                    {loading ? 'Publishing...' : 'Publish Current Data Live Now'}
+                  </button>
+                )}
+              </div>
+
+              {/* Total App Reset */}
               <div className="p-4 rounded-xl bg-red-50/70 dark:bg-red-950/30 border border-red-200 dark:border-red-900 space-y-3">
                 <div className="text-xs font-semibold text-red-800 dark:text-red-300">
                   Total App Reset (Clear All Data)
