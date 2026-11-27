@@ -5,7 +5,6 @@ import {
   ChevronRight,
   Flame,
   ShieldAlert,
-  Users,
 } from 'lucide-react';
 import type { AersRecord, TrackedContract } from '../types/recovery';
 import {
@@ -16,6 +15,7 @@ import {
   normalizeEvaluableFromAers,
   normalizeEvaluableFromTracked,
 } from '../utils/recoveryEngine';
+import { UserAvatar } from './UserAvatar';
 
 interface OfficeTypeBreakdownPanelProps {
   trackedContracts: TrackedContract[];
@@ -264,8 +264,8 @@ export function OfficeTypeBreakdownPanel({
                             className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30"
                           >
                             <td className="py-2 pl-10 pr-3 font-medium text-slate-900 dark:text-slate-100">
-                              <span className="inline-flex items-center gap-1.5">
-                                <Users className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span className="inline-flex items-center gap-2">
+                                <UserAvatar name={ro.officer} sizeClass="w-6 h-6 text-[10px]" />
                                 {ro.officer}
                               </span>
                             </td>
