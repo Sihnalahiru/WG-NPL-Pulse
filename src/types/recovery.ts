@@ -417,6 +417,34 @@ export interface OfficerEffortSummaryRow {
   highRiskExposure: number;
 }
 
+export const STAFF_FOLLOWUP_NAMES = [
+  'Manisha',
+  'Minula',
+  'Gavindi',
+  'Mihiranga',
+  'Chathuri',
+  'Sathsarani',
+  'Tharindu',
+  'Upeksha',
+  'Tharusha',
+  'Tashmi',
+] as const;
+
+export type StaffFollowUpName = (typeof STAFF_FOLLOWUP_NAMES)[number];
+
+export interface StaffAssignedContract {
+  contractNo: string;
+  staffName: string;
+  monthKey: string;
+  assignedAt: string;
+  assignedOpAge: number;
+  assignedDebtor: number;
+  assignedNpl: number;
+  assignedDue: number;
+  assignedCollection: number;
+  note?: string;
+}
+
 export interface BackupPayload {
   version: number;
   exportedAt: string;
@@ -425,5 +453,6 @@ export interface BackupPayload {
   aersMeta: AersMetadata | null;
   aersMasterList: AersRecord[];
   openingBaseline?: OpeningOfficerBaseline | null;
+  staffAssignments?: StaffAssignedContract[];
   notificationPrefs: NotificationPreferences;
 }

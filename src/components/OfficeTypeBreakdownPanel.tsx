@@ -74,7 +74,6 @@ export function OfficeTypeBreakdownPanel({
         closingNpl: acc.closingNpl + o.closingNpl,
         closingDebtor: acc.closingDebtor + o.closingDebtor,
         borderlineCount: acc.borderlineCount + o.borderlineCount,
-        borderlineMinToSave: acc.borderlineMinToSave + o.borderlineMinToSave,
         borderlineEfforts: acc.borderlineEfforts + o.borderlineEfforts,
         zeroEffortBorderlineCount:
           acc.zeroEffortBorderlineCount + o.zeroEffortBorderlineCount,
@@ -87,7 +86,6 @@ export function OfficeTypeBreakdownPanel({
         closingNpl: 0,
         closingDebtor: 0,
         borderlineCount: 0,
-        borderlineMinToSave: 0,
         borderlineEfforts: 0,
         zeroEffortBorderlineCount: 0,
         worstCount: 0,
@@ -221,7 +219,7 @@ export function OfficeTypeBreakdownPanel({
                     </span>
                     <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400 font-mono font-medium">
                       <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
-                      Borderline: {office.borderlineCount} ({formatCompactRs(office.borderlineMinToSave)})
+                      Borderline: {office.borderlineCount} accts
                     </span>
                     <span className="text-slate-700 dark:text-slate-300 font-mono">
                       Efforts: {office.borderlineEfforts}
@@ -252,7 +250,6 @@ export function OfficeTypeBreakdownPanel({
                           <th className="py-2 px-3 text-right">Closing NPL</th>
                           <th className="py-2 px-3 text-right">Closing Debtor</th>
                           <th className="py-2 px-3 text-right">Borderline (61-90)</th>
-                          <th className="py-2 px-3 text-right">Min to Save</th>
                           <th className="py-2 px-3 text-right">RO Efforts (0-Eff)</th>
                           <th className="py-2 px-4 text-right">WORST (W)</th>
                         </tr>
@@ -286,9 +283,6 @@ export function OfficeTypeBreakdownPanel({
                             </td>
                             <td className="py-2 px-3 text-right font-mono font-medium text-amber-700 dark:text-amber-400">
                               {ro.borderlineCount}
-                            </td>
-                            <td className="py-2 px-3 text-right font-mono text-blue-700 dark:text-blue-400">
-                              {formatCurrencyRs(ro.borderlineMinToSave)}
                             </td>
                             <td className="py-2 px-3 text-right font-mono">
                               <span className="text-slate-900 dark:text-slate-100 font-medium">
@@ -332,7 +326,7 @@ export function OfficeTypeBreakdownPanel({
                 Op Npl: {formatCompactRs(totals.opNpl)}
               </span>
               <span className="text-amber-700 dark:text-amber-400">
-                Borderline: {totals.borderlineCount} (Save {formatCompactRs(totals.borderlineMinToSave)})
+                Borderline: {totals.borderlineCount} accts
               </span>
               <span className="text-slate-800 dark:text-slate-200">
                 Efforts: {totals.borderlineEfforts} ({totals.zeroEffortBorderlineCount} zero)

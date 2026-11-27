@@ -7,6 +7,7 @@ import {
   Bot,
   Building2,
   CheckCircle2,
+  ClipboardCheck,
   Cloud,
   Database,
   Flame,
@@ -39,6 +40,7 @@ import { PulseLogoMark } from './components/FinanceIllustrations';
 import { KpiStrip } from './components/KpiStrip';
 import { NextMonthBorderlineCardsPanel } from './components/NextMonthBorderlineCardsPanel';
 import { OfficeTypeBreakdownPanel } from './components/OfficeTypeBreakdownPanel';
+import { StaffFollowUpMonitorPanel } from './components/StaffFollowUpMonitorPanel';
 import { TrackingTable } from './components/TrackingTable';
 import { TrendsEvaluationPanel } from './components/TrendsEvaluationPanel';
 import { VisitHistoryModal } from './components/VisitHistoryModal';
@@ -51,10 +53,13 @@ import type {
   FilterPreset,
   MonthlySnapshot,
   MrpEnrichment,
+  MrpPaymentMonth,
   NavSection,
   NotificationPreferences,
   OpeningOfficerBaseline,
+  StaffAssignedContract,
   TrackedContract,
+  VisitLogEntry,
   WhatsAppLocationMatch,
 } from './types/recovery';
 import {
@@ -92,116 +97,902 @@ const STORAGE_KEYS = {
   MRP_MAP: 'wg_v2_mrp_map',
   OPENING_BASELINE: 'wg_v2_opening_baseline',
   SNAPSHOTS: 'wg_v2_monthly_snapshots',
+  STAFF_ASSIGNMENTS: 'wg_v2_staff_assignments',
   NOTIF_PREFS: 'wg_v2_notification_prefs',
   THEME: 'wg_v2_theme',
 };
 
-function sanitizeAersList(raw: unknown): AersRecord[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((item): item is AersRecord => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-    .map((r) => ({
-      ...r,
-      contractNo: typeof r.contractNo === 'string' ? r.contractNo : String(r.contractNo ?? ''),
-      cusName: typeof r.cusName === 'string' ? r.cusName : '',
-      officeType: typeof r.officeType === 'string' ? r.officeType : '',
-      marketingOfficer: typeof r.marketingOfficer === 'string' ? r.marketingOfficer : '',
-      recoveryOfficer: typeof r.recoveryOfficer === 'string' ? r.recoveryOfficer : '',
-      nplReason: typeof r.nplReason === 'string' ? r.nplReason : '',
-      worstCaseProduct: typeof r.worstCaseProduct === 'string' ? r.worstCaseProduct : '',
-    }))
-    .filter((r) => r.contractNo.trim().length > 0);
+interface DataShapeMismatch {
+  source: string;
+  field: string;
+  expected: string;
+  received: string;
+  index?: number;
+  recordKey?: string;
+  action: 'dropped' | 'coerced' | 'fallback';
+  message: string;
 }
 
-function sanitizeTrackedList(raw: unknown): TrackedContract[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((item): item is TrackedContract => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-    .map((c) => ({
-      ...c,
-      contractNo: typeof c.contractNo === 'string' ? c.contractNo : String(c.contractNo ?? ''),
-      cusName: typeof c.cusName === 'string' ? c.cusName : '',
-      visitHistory: Array.isArray(c.visitHistory) ? c.visitHistory : [],
-      mrp:
-        c.mrp && typeof c.mrp === 'object' && !Array.isArray(c.mrp)
-          ? {
-              ...c.mrp,
-              paymentPattern: Array.isArray(c.mrp.paymentPattern) ? c.mrp.paymentPattern : [],
-            }
-          : undefined,
-    }))
-    .filter((c) => c.contractNo.trim().length > 0);
+interface SanitizeReport<T> {
+  data: T;
+  issues: DataShapeMismatch[];
+  droppedCount: number;
+  coercedCount: number;
 }
 
-function sanitizeMrpMap(raw: unknown): Map<string, MrpEnrichment> {
-  const map = new Map<string, MrpEnrichment>();
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return map;
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      const obj = v as MrpEnrichment;
-      map.set(k, {
-        ...obj,
-        paymentPattern: Array.isArray(obj.paymentPattern) ? obj.paymentPattern : [],
+const MAX_LOGGED_ISSUES_PER_BATCH = 25;
+
+function isPlainObject(val: unknown): val is Record<string, unknown> {
+  return Boolean(val && typeof val === 'object' && !Array.isArray(val));
+}
+
+function describeValueType(val: unknown): string {
+  if (val === null) return 'null';
+  if (val === undefined) return 'undefined';
+  if (Array.isArray(val)) return `array(len=${val.length})`;
+  if (typeof val === 'boolean') return `boolean(${String(val)})`;
+  if (typeof val === 'number') return Number.isFinite(val) ? 'number' : `number(${String(val)})`;
+  if (typeof val === 'string') return val.length === 0 ? 'string(empty)' : 'string';
+  if (val instanceof Map) return `Map(size=${val.size})`;
+  if (val instanceof Set) return `Set(size=${val.size})`;
+  return typeof val;
+}
+
+type IssueReporter = (issue: Omit<DataShapeMismatch, 'source'>) => void;
+
+function runDataSanitizer<T>(
+  source: string,
+  raw: unknown,
+  fallback: T,
+  sanitizer: (input: unknown, report: IssueReporter) => T,
+): SanitizeReport<T> {
+  const issues: DataShapeMismatch[] = [];
+  let droppedCount = 0;
+  let coercedCount = 0;
+
+  const report: IssueReporter = (issue) => {
+    if (issue.action === 'dropped') droppedCount += 1;
+    if (issue.action === 'coerced') coercedCount += 1;
+    if (issues.length < MAX_LOGGED_ISSUES_PER_BATCH) {
+      issues.push({ source, ...issue });
+    }
+  };
+
+  try {
+    const data = sanitizer(raw, report);
+    if (issues.length > 0 || droppedCount > 0 || coercedCount > 0) {
+      const totalFlagged = droppedCount + coercedCount + issues.filter((i) => i.action === 'fallback').length;
+      console.groupCollapsed(
+        `[WG Pulse DataGuard] Shape mismatch in "${source}" (${droppedCount} dropped, ${coercedCount} coerced, ${totalFlagged} total issues)`,
+      );
+      console.warn('Sanitizer recovered before render cycle. Sample mismatches:', issues);
+      if (totalFlagged > issues.length) {
+        console.warn(`...and ${totalFlagged - issues.length} additional mismatches omitted from log.`);
+      }
+      console.groupEnd();
+    }
+    return { data, issues, droppedCount, coercedCount };
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const fatalIssue: DataShapeMismatch = {
+      source,
+      field: '<root>',
+      expected: 'valid parseable structure',
+      received: describeValueType(raw),
+      action: 'fallback',
+      message: `Unhandled exception during sanitization: ${errMsg}`,
+    };
+    console.error(`[WG Pulse DataGuard] Fatal parse error in "${source}":`, err);
+    return {
+      data: fallback,
+      issues: [fatalIssue],
+      droppedCount: 0,
+      coercedCount: 0,
+    };
+  }
+}
+
+function coerceStringField(
+  obj: Record<string, unknown>,
+  field: string,
+  report: IssueReporter,
+  index?: number,
+  recordKey?: string,
+  defaultValue = '',
+): string {
+  const val = obj[field];
+  if (val === undefined || val === null) return defaultValue;
+  if (typeof val === 'string') return val;
+  if (typeof val === 'number' && Number.isFinite(val)) {
+    report({
+      field,
+      expected: 'string',
+      received: describeValueType(val),
+      index,
+      recordKey,
+      action: 'coerced',
+      message: `Coerced numeric "${field}" to string.`,
+    });
+    return String(val);
+  }
+  report({
+    field,
+    expected: 'string',
+    received: describeValueType(val),
+    index,
+    recordKey,
+    action: 'coerced',
+    message: `Unexpected ${describeValueType(val)} for string field "${field}"; reset to default.`,
+  });
+  return defaultValue;
+}
+
+function coerceNumberField(
+  obj: Record<string, unknown>,
+  field: string,
+  report: IssueReporter,
+  index?: number,
+  recordKey?: string,
+  defaultValue = 0,
+): number {
+  const val = obj[field];
+  if (val === undefined || val === null || val === '') return defaultValue;
+  if (typeof val === 'number' && Number.isFinite(val)) return val;
+  if (typeof val === 'string') {
+    const parsed = Number(val.replace(/,/g, '').trim());
+    if (Number.isFinite(parsed)) {
+      report({
+        field,
+        expected: 'number',
+        received: 'numeric string',
+        index,
+        recordKey,
+        action: 'coerced',
+        message: `Parsed string "${field}" into number.`,
       });
+      return parsed;
     }
   }
-  return map;
+  report({
+    field,
+    expected: 'finite number',
+    received: describeValueType(val),
+    index,
+    recordKey,
+    action: 'coerced',
+    message: `Unexpected ${describeValueType(val)} for numeric field "${field}"; reset to ${defaultValue}.`,
+  });
+  return defaultValue;
+}
+
+function sanitizePaymentPattern(
+  raw: unknown,
+  report: IssueReporter,
+  recordKey: string,
+  index?: number,
+): MrpPaymentMonth[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    report({
+      field: 'mrp.paymentPattern',
+      expected: 'MrpPaymentMonth[]',
+      received: describeValueType(raw),
+      index,
+      recordKey,
+      action: 'coerced',
+      message: `Expected array for mrp.paymentPattern, received ${describeValueType(raw)}.`,
+    });
+    return [];
+  }
+  const clean: MrpPaymentMonth[] = [];
+  raw.forEach((entry, idx) => {
+    if (!isPlainObject(entry)) {
+      report({
+        field: `mrp.paymentPattern[${idx}]`,
+        expected: 'object',
+        received: describeValueType(entry),
+        index,
+        recordKey,
+        action: 'dropped',
+        message: 'Dropped non-object entry in mrp.paymentPattern.',
+      });
+      return;
+    }
+    clean.push(entry as unknown as MrpPaymentMonth);
+  });
+  return clean;
+}
+
+const AERS_STRING_FIELDS = [
+  'no',
+  'cusName',
+  'contractDate',
+  'nextDueDate',
+  'lastPayDate',
+  'contractStatus',
+  'recoveryStatus',
+  'marketingOfficer',
+  'recoveryOfficer',
+  'currentStock',
+  'department',
+  'address',
+  'mobileNo',
+  'nplReason',
+  'worstCaseProduct',
+  'officeType',
+  'currentRc',
+] as const;
+
+const AERS_NUMBER_FIELDS = [
+  'opAge',
+  'currentAge',
+  'opBalDebtor',
+  'closingDebtor',
+  'dueBudgetMonth',
+  'currentMonthDue',
+  'totalCollection',
+  'cashColl',
+  'capitalOutstanding',
+  'interestInSuspense',
+  'actualDpd',
+  'monthEndForecastDpd',
+  'minAmountToReverseNpl',
+  'opNpl',
+  'npl',
+  'lastPaidAmount',
+  'financeAmount',
+  'opCapitalOutstanding',
+  'totalEfforts',
+  'assignOfficerEfforts',
+] as const;
+
+function sanitizeAersListWithReport(
+  raw: unknown,
+  source = 'aersRecords',
+): SanitizeReport<AersRecord[]> {
+  return runDataSanitizer<AersRecord[]>(source, raw, [], (input, report) => {
+    if (!Array.isArray(input)) {
+      report({
+        field: '<root>',
+        expected: 'AersRecord[]',
+        received: describeValueType(input),
+        action: 'fallback',
+        message: `Expected an array of AERS records, got ${describeValueType(input)}.`,
+      });
+      return [];
+    }
+
+    const result: AersRecord[] = [];
+    input.forEach((item, index) => {
+      if (!isPlainObject(item)) {
+        report({
+          field: `[${index}]`,
+          expected: 'AersRecord object',
+          received: describeValueType(item),
+          index,
+          action: 'dropped',
+          message: `Dropped malformed AERS record at index ${index}.`,
+        });
+        return;
+      }
+
+      const rawContractNo = item.contractNo;
+      const contractNo =
+        typeof rawContractNo === 'string'
+          ? rawContractNo.trim()
+          : typeof rawContractNo === 'number' && Number.isFinite(rawContractNo)
+            ? String(rawContractNo)
+            : '';
+
+      if (!contractNo) {
+        report({
+          field: 'contractNo',
+          expected: 'non-empty string',
+          received: describeValueType(rawContractNo),
+          index,
+          action: 'dropped',
+          message: `Dropped AERS record at index ${index} missing valid contractNo.`,
+        });
+        return;
+      }
+
+      if (typeof rawContractNo !== 'string') {
+        report({
+          field: 'contractNo',
+          expected: 'string',
+          received: describeValueType(rawContractNo),
+          index,
+          recordKey: contractNo,
+          action: 'coerced',
+          message: 'Coerced numeric contractNo to string.',
+        });
+      }
+
+      const cleaned: Record<string, unknown> = { ...item, contractNo };
+      for (const field of AERS_STRING_FIELDS) {
+        cleaned[field] = coerceStringField(item, field, report, index, contractNo);
+      }
+      for (const field of AERS_NUMBER_FIELDS) {
+        cleaned[field] = coerceNumberField(item, field, report, index, contractNo);
+      }
+      if (item.capitalArrears !== undefined) {
+        cleaned.capitalArrears = coerceNumberField(item, 'capitalArrears', report, index, contractNo);
+      }
+
+      result.push(cleaned as unknown as AersRecord);
+    });
+
+    return result;
+  });
+}
+
+function sanitizeAersList(raw: unknown, source = 'aersRecords'): AersRecord[] {
+  return sanitizeAersListWithReport(raw, source).data;
+}
+
+const TRACKED_STRING_FIELDS = [
+  'cusName',
+  'mobileNo',
+  'address',
+  'recoveryOfficer',
+  'marketingOfficer',
+  'lastPayDate',
+  'vehicleNo',
+  'visitDate',
+  'ppDate',
+  'handOverDate',
+  'remark',
+  'remarkBy',
+  'ro',
+  'locationUrl',
+  'addedAt',
+] as const;
+
+const TRACKED_NUMBER_FIELDS = [
+  'opAge',
+  'currentAge',
+  'closingDebtor',
+  'capitalOutstanding',
+  'opNpl',
+  'npl',
+  'actualDpd',
+  'monthEndForecastDpd',
+  'minAmountToReverseNpl',
+  'lastPaidAmount',
+  'nplSavedAmount',
+] as const;
+
+function sanitizeTrackedListWithReport(
+  raw: unknown,
+  source = 'trackedContracts',
+): SanitizeReport<TrackedContract[]> {
+  return runDataSanitizer<TrackedContract[]>(source, raw, [], (input, report) => {
+    if (!Array.isArray(input)) {
+      report({
+        field: '<root>',
+        expected: 'TrackedContract[]',
+        received: describeValueType(input),
+        action: 'fallback',
+        message: `Expected an array of tracked contracts, got ${describeValueType(input)}.`,
+      });
+      return [];
+    }
+
+    const result: TrackedContract[] = [];
+    input.forEach((item, index) => {
+      if (!isPlainObject(item)) {
+        report({
+          field: `[${index}]`,
+          expected: 'TrackedContract object',
+          received: describeValueType(item),
+          index,
+          action: 'dropped',
+          message: `Dropped malformed tracked contract at index ${index}.`,
+        });
+        return;
+      }
+
+      const rawContractNo = item.contractNo;
+      const contractNo =
+        typeof rawContractNo === 'string'
+          ? rawContractNo.trim()
+          : typeof rawContractNo === 'number' && Number.isFinite(rawContractNo)
+            ? String(rawContractNo)
+            : '';
+
+      if (!contractNo) {
+        report({
+          field: 'contractNo',
+          expected: 'non-empty string',
+          received: describeValueType(rawContractNo),
+          index,
+          action: 'dropped',
+          message: `Dropped tracked contract at index ${index} missing valid contractNo.`,
+        });
+        return;
+      }
+
+      const cleaned: Record<string, unknown> = { ...item, contractNo };
+      for (const field of TRACKED_STRING_FIELDS) {
+        cleaned[field] = coerceStringField(item, field, report, index, contractNo);
+      }
+      for (const field of TRACKED_NUMBER_FIELDS) {
+        cleaned[field] = coerceNumberField(item, field, report, index, contractNo);
+      }
+
+      // Sanitize visitHistory array
+      const rawHistory = item.visitHistory;
+      if (rawHistory === undefined || rawHistory === null) {
+        cleaned.visitHistory = [];
+      } else if (!Array.isArray(rawHistory)) {
+        report({
+          field: 'visitHistory',
+          expected: 'VisitLogEntry[]',
+          received: describeValueType(rawHistory),
+          index,
+          recordKey: contractNo,
+          action: 'coerced',
+          message: `Non-array visitHistory (${describeValueType(rawHistory)}); reset to [].`,
+        });
+        cleaned.visitHistory = [];
+      } else {
+        const cleanHistory: VisitLogEntry[] = [];
+        rawHistory.forEach((entry, hIdx) => {
+          if (!isPlainObject(entry)) {
+            report({
+              field: `visitHistory[${hIdx}]`,
+              expected: 'VisitLogEntry object',
+              received: describeValueType(entry),
+              index,
+              recordKey: contractNo,
+              action: 'dropped',
+              message: 'Dropped non-object entry in visitHistory.',
+            });
+            return;
+          }
+          cleanHistory.push(entry as unknown as VisitLogEntry);
+        });
+        cleaned.visitHistory = cleanHistory;
+      }
+
+      // Sanitize optional mrp enrichment
+      if (item.mrp === undefined || item.mrp === null) {
+        cleaned.mrp = undefined;
+      } else if (!isPlainObject(item.mrp)) {
+        report({
+          field: 'mrp',
+          expected: 'MrpEnrichment object',
+          received: describeValueType(item.mrp),
+          index,
+          recordKey: contractNo,
+          action: 'coerced',
+          message: `Invalid mrp shape (${describeValueType(item.mrp)}); cleared.`,
+        });
+        cleaned.mrp = undefined;
+      } else {
+        cleaned.mrp = {
+          ...item.mrp,
+          paymentPattern: sanitizePaymentPattern(item.mrp.paymentPattern, report, contractNo, index),
+        };
+      }
+
+      result.push(cleaned as unknown as TrackedContract);
+    });
+
+    return result;
+  });
+}
+
+function sanitizeTrackedList(raw: unknown, source = 'trackedContracts'): TrackedContract[] {
+  return sanitizeTrackedListWithReport(raw, source).data;
+}
+
+function sanitizeStaffAssignmentsWithReport(
+  raw: unknown,
+  source = 'staffAssignments',
+): SanitizeReport<StaffAssignedContract[]> {
+  return runDataSanitizer<StaffAssignedContract[]>(source, raw, [], (input, report) => {
+    if (!Array.isArray(input)) {
+      report({
+        field: '<root>',
+        expected: 'StaffAssignedContract[]',
+        received: describeValueType(input),
+        action: 'fallback',
+        message: `Expected an array of staff assignments, got ${describeValueType(input)}.`,
+      });
+      return [];
+    }
+
+    const result: StaffAssignedContract[] = [];
+    input.forEach((item, index) => {
+      if (!isPlainObject(item)) {
+        report({
+          field: `[${index}]`,
+          expected: 'StaffAssignedContract object',
+          received: describeValueType(item),
+          index,
+          action: 'dropped',
+          message: `Dropped malformed staff assignment at index ${index}.`,
+        });
+        return;
+      }
+
+      const contractNo =
+        typeof item.contractNo === 'string'
+          ? item.contractNo.trim()
+          : typeof item.contractNo === 'number' && Number.isFinite(item.contractNo)
+            ? String(item.contractNo)
+            : '';
+      const staffName = typeof item.staffName === 'string' ? item.staffName.trim() : '';
+      const monthKey = typeof item.monthKey === 'string' ? item.monthKey.trim() : '';
+
+      if (!contractNo || !staffName || !monthKey) {
+        report({
+          field: !contractNo ? 'contractNo' : !staffName ? 'staffName' : 'monthKey',
+          expected: 'non-empty string',
+          received: describeValueType(
+            !contractNo ? item.contractNo : !staffName ? item.staffName : item.monthKey,
+          ),
+          index,
+          action: 'dropped',
+          message: `Dropped staff assignment at index ${index} missing contractNo, staffName, or monthKey.`,
+        });
+        return;
+      }
+
+      const toFiniteNum = (val: unknown): number => {
+        if (typeof val === 'number' && Number.isFinite(val)) return val;
+        const parsed = Number(val);
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
+
+      result.push({
+        contractNo,
+        staffName,
+        monthKey,
+        assignedAt:
+          typeof item.assignedAt === 'string' && item.assignedAt.trim()
+            ? item.assignedAt.trim()
+            : getTodayISO(),
+        assignedOpAge: toFiniteNum(item.assignedOpAge),
+        assignedDebtor: toFiniteNum(item.assignedDebtor),
+        assignedNpl: toFiniteNum(item.assignedNpl),
+        assignedDue: toFiniteNum(item.assignedDue),
+        assignedCollection: toFiniteNum(item.assignedCollection),
+        note: typeof item.note === 'string' && item.note.trim() ? item.note.trim() : undefined,
+      });
+    });
+
+    return result;
+  });
+}
+
+function sanitizeStaffAssignments(
+  raw: unknown,
+  source = 'staffAssignments',
+): StaffAssignedContract[] {
+  return sanitizeStaffAssignmentsWithReport(raw, source).data;
+}
+
+function sanitizeMrpMapWithReport(
+  raw: unknown,
+  source = 'mrpMap',
+): SanitizeReport<Map<string, MrpEnrichment>> {
+  return runDataSanitizer<Map<string, MrpEnrichment>>(
+    source,
+    raw,
+    new Map<string, MrpEnrichment>(),
+    (input, report) => {
+      const map = new Map<string, MrpEnrichment>();
+      if (input === null || input === undefined) return map;
+
+      const entries: [string, unknown][] =
+        input instanceof Map
+          ? Array.from(input.entries()).map(([k, v]) => [String(k), v])
+          : isPlainObject(input)
+            ? Object.entries(input)
+            : [];
+
+      if (!(input instanceof Map) && !isPlainObject(input)) {
+        report({
+          field: '<root>',
+          expected: 'Record<string, MrpEnrichment> | Map',
+          received: describeValueType(input),
+          action: 'fallback',
+          message: `Expected plain object or Map for mrpMap, got ${describeValueType(input)}.`,
+        });
+        return map;
+      }
+
+      for (const [k, v] of entries) {
+        if (!isPlainObject(v)) {
+          report({
+            field: k,
+            expected: 'MrpEnrichment object',
+            received: describeValueType(v),
+            recordKey: k,
+            action: 'dropped',
+            message: `Dropped malformed MRP entry for "${k}".`,
+          });
+          continue;
+        }
+        const obj = v as unknown as MrpEnrichment;
+        map.set(k, {
+          ...obj,
+          nplCategory: coerceStringField(v, 'nplCategory', report, undefined, k),
+          bucketMovement: coerceStringField(v, 'bucketMovement', report, undefined, k),
+          impairmentStage: coerceStringField(v, 'impairmentStage', report, undefined, k),
+          recoveryAttention: coerceStringField(v, 'recoveryAttention', report, undefined, k),
+          notPaidSummary: coerceStringField(v, 'notPaidSummary', report, undefined, k),
+          paymentPattern: sanitizePaymentPattern(v.paymentPattern, report, k),
+        });
+      }
+      return map;
+    },
+  );
+}
+
+function sanitizeMrpMap(raw: unknown, source = 'mrpMap'): Map<string, MrpEnrichment> {
+  return sanitizeMrpMapWithReport(raw, source).data;
+}
+
+function sanitizeSnapshotsListWithReport(
+  raw: unknown,
+  source = 'monthlySnapshots',
+): SanitizeReport<MonthlySnapshot[]> {
+  return runDataSanitizer<MonthlySnapshot[]>(source, raw, [], (input, report) => {
+    if (!Array.isArray(input)) {
+      report({
+        field: '<root>',
+        expected: 'MonthlySnapshot[]',
+        received: describeValueType(input),
+        action: 'fallback',
+        message: `Expected array of monthly snapshots, got ${describeValueType(input)}.`,
+      });
+      return [];
+    }
+
+    const result: MonthlySnapshot[] = [];
+    input.forEach((item, index) => {
+      if (!isPlainObject(item)) {
+        report({
+          field: `[${index}]`,
+          expected: 'MonthlySnapshot object',
+          received: describeValueType(item),
+          index,
+          action: 'dropped',
+          message: `Dropped malformed snapshot at index ${index}.`,
+        });
+        return;
+      }
+      const id = coerceStringField(item, 'id', report, index, undefined, `snap_${index}`);
+      const snapshotDate = coerceStringField(item, 'snapshotDate', report, index, id);
+      if (!snapshotDate) {
+        report({
+          field: 'snapshotDate',
+          expected: 'non-empty date string',
+          received: describeValueType(item.snapshotDate),
+          index,
+          recordKey: id,
+          action: 'dropped',
+          message: `Dropped snapshot "${id}" with missing snapshotDate.`,
+        });
+        return;
+      }
+      result.push({
+        ...(item as unknown as MonthlySnapshot),
+        id,
+        snapshotDate,
+        label: coerceStringField(item, 'label', report, index, id, snapshotDate),
+        trackedCount: coerceNumberField(item, 'trackedCount', report, index, id),
+        trackedDebtor: coerceNumberField(item, 'trackedDebtor', report, index, id),
+        trackedNpl: coerceNumberField(item, 'trackedNpl', report, index, id),
+        nplSavedAmount: coerceNumberField(item, 'nplSavedAmount', report, index, id),
+        nplSavedCount: coerceNumberField(item, 'nplSavedCount', report, index, id),
+        newNplAmount: coerceNumberField(item, 'newNplAmount', report, index, id),
+        fallenNplCount: coerceNumberField(item, 'fallenNplCount', report, index, id),
+        collectionPct: coerceNumberField(item, 'collectionPct', report, index, id),
+      });
+    });
+
+    return result;
+  });
+}
+
+function sanitizeOpeningBaseline(
+  raw: unknown,
+  source = 'openingBaseline',
+): OpeningOfficerBaseline | null {
+  return runDataSanitizer<OpeningOfficerBaseline | null>(source, raw, null, (input, report) => {
+    if (input === null || input === undefined) return null;
+    if (!isPlainObject(input)) {
+      report({
+        field: '<root>',
+        expected: 'OpeningOfficerBaseline object',
+        received: describeValueType(input),
+        action: 'fallback',
+        message: `Expected OpeningOfficerBaseline object, got ${describeValueType(input)}.`,
+      });
+      return null;
+    }
+
+    const rawByOfficer = input.byOfficer;
+    const cleanByOfficer: OpeningOfficerBaseline['byOfficer'] = {};
+
+    if (!isPlainObject(rawByOfficer)) {
+      report({
+        field: 'byOfficer',
+        expected: 'Record<string, OfficerBaselineTotals>',
+        received: describeValueType(rawByOfficer),
+        action: 'coerced',
+        message: `Missing or invalid "byOfficer" map (${describeValueType(rawByOfficer)}); initialized empty.`,
+      });
+    } else {
+      for (const [officerKey, totals] of Object.entries(rawByOfficer)) {
+        if (!isPlainObject(totals)) {
+          report({
+            field: `byOfficer.${officerKey}`,
+            expected: 'object',
+            received: describeValueType(totals),
+            recordKey: officerKey,
+            action: 'dropped',
+            message: `Dropped malformed opening baseline entry for officer "${officerKey}".`,
+          });
+          continue;
+        }
+        cleanByOfficer[officerKey] = {
+          openingCount: coerceNumberField(totals, 'openingCount', report, undefined, officerKey),
+          openingDebtor: coerceNumberField(totals, 'openingDebtor', report, undefined, officerKey),
+          openingNpl: coerceNumberField(totals, 'openingNpl', report, undefined, officerKey),
+          openingNplCount: coerceNumberField(totals, 'openingNplCount', report, undefined, officerKey),
+        };
+      }
+    }
+
+    return {
+      printedDateTime: coerceStringField(input, 'printedDateTime', report),
+      byOfficer: cleanByOfficer,
+    };
+  }).data;
+}
+
+function readJsonStorageSafe(key: string): { found: boolean; value: unknown } {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return { found: false, value: undefined };
+    return { found: true, value: JSON.parse(raw) };
+  } catch (err) {
+    console.warn(`[WG Pulse DataGuard] Failed to parse localStorage key "${key}":`, err);
+    return { found: false, value: undefined };
+  }
 }
 
 function readObjectStorage<T extends object>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as T;
+  const { found, value } = readJsonStorageSafe(key);
+  if (!found) return fallback;
+  return runDataSanitizer<T>(`localStorage:${key}`, value, fallback, (input, report) => {
+    if (!isPlainObject(input)) {
+      report({
+        field: '<root>',
+        expected: 'plain object',
+        received: describeValueType(input),
+        action: 'fallback',
+        message: `Expected object in localStorage "${key}", got ${describeValueType(input)}.`,
+      });
+      return fallback;
     }
-    return fallback;
-  } catch {
-    return fallback;
-  }
+    return { ...fallback, ...(input as T) };
+  }).data;
 }
 
 function readNullableObjectStorage<T extends object>(key: string): T | null {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as T;
+  const { found, value } = readJsonStorageSafe(key);
+  if (!found || value === null) return null;
+  return runDataSanitizer<T | null>(`localStorage:${key}`, value, null, (input, report) => {
+    if (!isPlainObject(input)) {
+      report({
+        field: '<root>',
+        expected: 'plain object | null',
+        received: describeValueType(input),
+        action: 'fallback',
+        message: `Expected object in localStorage "${key}", got ${describeValueType(input)}.`,
+      });
+      return null;
     }
-    return null;
-  } catch {
-    return null;
-  }
+    return input as T;
+  }).data;
 }
 
 // Local isolation boundary so a child panel error NEVER crashes the entire app
+interface SectionSafeBoundaryProps {
+  name: string;
+  resetKey?: string | number;
+  children: React.ReactNode;
+}
+
+interface SectionSafeBoundaryState {
+  errorMsg: string | null;
+  errorStack: string;
+  componentStack: string;
+  retryCount: number;
+}
+
 class SectionSafeBoundary extends React.Component<
-  { name: string; children: React.ReactNode },
-  { errorMsg: string | null }
+  SectionSafeBoundaryProps,
+  SectionSafeBoundaryState
 > {
-  constructor(props: { name: string; children: React.ReactNode }) {
+  constructor(props: SectionSafeBoundaryProps) {
     super(props);
-    this.state = { errorMsg: null };
+    this.state = {
+      errorMsg: null,
+      errorStack: '',
+      componentStack: '',
+      retryCount: 0,
+    };
   }
-  static getDerivedStateFromError(err: Error) {
-    return { errorMsg: err?.message || String(err) };
+
+  static getDerivedStateFromError(err: Error): Partial<SectionSafeBoundaryState> {
+    return {
+      errorMsg: err?.message || String(err),
+      errorStack: err?.stack || '',
+    };
   }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error(`[WG Pulse SectionBoundary] "${this.props.name}" crashed during render:`, {
+      message: error?.message || String(error),
+      stack: error?.stack,
+      componentStack: info?.componentStack,
+    });
+    this.setState({ componentStack: info?.componentStack || '' });
+  }
+
+  componentDidUpdate(prevProps: SectionSafeBoundaryProps) {
+    if (
+      this.state.errorMsg &&
+      this.props.resetKey !== undefined &&
+      prevProps.resetKey !== this.props.resetKey
+    ) {
+      this.setState({ errorMsg: null, errorStack: '', componentStack: '' });
+    }
+  }
+
   render() {
     if (this.state.errorMsg) {
       return (
-        <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 flex items-center justify-between gap-3">
-          <span>
-            <strong>{this.props.name}:</strong> {this.state.errorMsg}
-          </span>
-          <button
-            type="button"
-            onClick={() => this.setState({ errorMsg: null })}
-            className="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-semibold"
-          >
-            Retry
-          </button>
+        <div
+          role="alert"
+          className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 space-y-2"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span>
+              <strong>{this.props.name}:</strong> {this.state.errorMsg}
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                this.setState((prev) => ({
+                  errorMsg: null,
+                  errorStack: '',
+                  componentStack: '',
+                  retryCount: prev.retryCount + 1,
+                }))
+              }
+              className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold shrink-0"
+            >
+              Retry{this.state.retryCount > 0 ? ` (${this.state.retryCount + 1})` : ''}
+            </button>
+          </div>
+          {(this.state.componentStack || this.state.errorStack) && (
+            <details className="text-[11px] opacity-85">
+              <summary className="cursor-pointer font-medium select-none">
+                Technical error details
+              </summary>
+              <pre className="mt-1.5 p-2 rounded-lg bg-amber-100/70 dark:bg-amber-950/80 overflow-x-auto max-h-40 whitespace-pre-wrap font-mono text-[10px]">
+                {this.state.componentStack || this.state.errorStack}
+              </pre>
+            </details>
+          )}
         </div>
       );
     }
@@ -229,12 +1020,8 @@ export default function App() {
   });
 
   const [aersRecords, setAersRecords] = useState<AersRecord[]>(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.AERS_MASTER);
-      return raw ? sanitizeAersList(JSON.parse(raw)) : [];
-    } catch {
-      return [];
-    }
+    const { found, value } = readJsonStorageSafe(STORAGE_KEYS.AERS_MASTER);
+    return found ? sanitizeAersList(value, `localStorage:${STORAGE_KEYS.AERS_MASTER}`) : [];
   });
 
   const [aersMeta, setAersMeta] = useState<AersMetadata | null>(() =>
@@ -242,31 +1029,30 @@ export default function App() {
   );
 
   const [openingBaseline, setOpeningBaseline] =
-    useState<OpeningOfficerBaseline | null>(() =>
-      readNullableObjectStorage<OpeningOfficerBaseline>(
-        STORAGE_KEYS.OPENING_BASELINE,
-      ),
-    );
+    useState<OpeningOfficerBaseline | null>(() => {
+      const { found, value } = readJsonStorageSafe(STORAGE_KEYS.OPENING_BASELINE);
+      return found
+        ? sanitizeOpeningBaseline(value, `localStorage:${STORAGE_KEYS.OPENING_BASELINE}`)
+        : null;
+    });
 
   const [trackedContracts, setTrackedContracts] = useState<TrackedContract[]>(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.TRACKED);
-      return raw ? sanitizeTrackedList(JSON.parse(raw)) : [];
-    } catch {
-      return [];
-    }
+    const { found, value } = readJsonStorageSafe(STORAGE_KEYS.TRACKED);
+    return found ? sanitizeTrackedList(value, `localStorage:${STORAGE_KEYS.TRACKED}`) : [];
   });
 
   const [monthlySnapshots, setMonthlySnapshots] = useState<MonthlySnapshot[]>(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.SNAPSHOTS);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed)
-        ? parsed.filter((s) => s && typeof s === 'object' && !Array.isArray(s))
-        : [];
-    } catch {
-      return [];
-    }
+    const { found, value } = readJsonStorageSafe(STORAGE_KEYS.SNAPSHOTS);
+    return found
+      ? sanitizeSnapshotsListWithReport(value, `localStorage:${STORAGE_KEYS.SNAPSHOTS}`).data
+      : [];
+  });
+
+  const [staffAssignments, setStaffAssignments] = useState<StaffAssignedContract[]>(() => {
+    const { found, value } = readJsonStorageSafe(STORAGE_KEYS.STAFF_ASSIGNMENTS);
+    return found
+      ? sanitizeStaffAssignments(value, `localStorage:${STORAGE_KEYS.STAFF_ASSIGNMENTS}`)
+      : [];
   });
 
   const [notifPrefs, setNotifPrefs] = useState<NotificationPreferences>(() =>
@@ -279,16 +1065,14 @@ export default function App() {
 
   const [activeNav, setActiveNav] = useState<NavSection>('overview');
   const [toolsSubTab, setToolsSubTab] = useState<
-    'office_breakdown' | 'bm_analytics' | 'ai' | 'alerts'
-  >('office_breakdown');
+    'staff_monitor' | 'office_breakdown' | 'bm_analytics' | 'ai' | 'alerts'
+  >('staff_monitor');
   const [settingsSubTab, setSettingsSubTab] = useState<'lookup' | 'backup'>('lookup');
   const [mrpMap, setMrpMap] = useState<Map<string, MrpEnrichment>>(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.MRP_MAP);
-      return raw ? sanitizeMrpMap(JSON.parse(raw)) : new Map<string, MrpEnrichment>();
-    } catch {
-      return new Map<string, MrpEnrichment>();
-    }
+    const { found, value } = readJsonStorageSafe(STORAGE_KEYS.MRP_MAP);
+    return found
+      ? sanitizeMrpMap(value, `localStorage:${STORAGE_KEYS.MRP_MAP}`)
+      : new Map<string, MrpEnrichment>();
   });
 
   const [regularContractNos, setRegularContractNos] = useState<Set<string>>(() => new Set());
@@ -338,40 +1122,90 @@ export default function App() {
       setIsSyncingCloud(true);
       try {
         const cloud = await fetchLiveCloudData();
-        if (cloud && typeof cloud === 'object' && !Array.isArray(cloud)) {
-          const cleanAers = sanitizeAersList(cloud.aersRecords);
-          if (Array.isArray(cloud.aersRecords)) {
-            setAersRecords(cleanAers);
+        if (isPlainObject(cloud)) {
+          let totalDropped = 0;
+
+          const aersReport = sanitizeAersListWithReport(
+            cloud.aersRecords,
+            'cloud:aersRecords',
+          );
+          if (cloud.aersRecords !== undefined) {
+            setAersRecords(aersReport.data);
+            totalDropped += aersReport.droppedCount;
           }
-          if (cloud.aersMeta && typeof cloud.aersMeta === 'object' && !Array.isArray(cloud.aersMeta)) {
-            setAersMeta(cloud.aersMeta);
-          }
-          if (cloud.mrpMap !== undefined) {
-            setMrpMap(sanitizeMrpMap(cloud.mrpMap));
-          }
-          if (
-            cloud.openingBaseline &&
-            typeof cloud.openingBaseline === 'object' &&
-            !Array.isArray(cloud.openingBaseline)
-          ) {
-            setOpeningBaseline(cloud.openingBaseline);
-          }
-          if (Array.isArray(cloud.trackedContracts)) {
-            setTrackedContracts(sanitizeTrackedList(cloud.trackedContracts));
-          }
-          if (Array.isArray(cloud.monthlySnapshots)) {
-            setMonthlySnapshots(
-              cloud.monthlySnapshots.filter(
-                (s) => s && typeof s === 'object' && !Array.isArray(s),
-              ),
+
+          if (isPlainObject(cloud.aersMeta)) {
+            setAersMeta(cloud.aersMeta as unknown as AersMetadata);
+          } else if (cloud.aersMeta !== undefined && cloud.aersMeta !== null) {
+            console.warn(
+              `[WG Pulse DataGuard] Ignored malformed "cloud:aersMeta" (${describeValueType(cloud.aersMeta)}).`,
             );
           }
+
+          if (cloud.mrpMap !== undefined) {
+            const mrpReport = sanitizeMrpMapWithReport(cloud.mrpMap, 'cloud:mrpMap');
+            setMrpMap(mrpReport.data);
+            totalDropped += mrpReport.droppedCount;
+          }
+
+          if (cloud.openingBaseline !== undefined) {
+            setOpeningBaseline(
+              sanitizeOpeningBaseline(cloud.openingBaseline, 'cloud:openingBaseline'),
+            );
+          }
+
+          if (cloud.trackedContracts !== undefined) {
+            const trackedReport = sanitizeTrackedListWithReport(
+              cloud.trackedContracts,
+              'cloud:trackedContracts',
+            );
+            setTrackedContracts(trackedReport.data);
+            totalDropped += trackedReport.droppedCount;
+          }
+
+          if (cloud.monthlySnapshots !== undefined) {
+            const snapReport = sanitizeSnapshotsListWithReport(
+              cloud.monthlySnapshots,
+              'cloud:monthlySnapshots',
+            );
+            setMonthlySnapshots(snapReport.data);
+            totalDropped += snapReport.droppedCount;
+          }
+
+          if (cloud.staffAssignments !== undefined) {
+            const staffReport = sanitizeStaffAssignmentsWithReport(
+              cloud.staffAssignments,
+              'cloud:staffAssignments',
+            );
+            setStaffAssignments(staffReport.data);
+            totalDropped += staffReport.droppedCount;
+          }
+
           setAnimKey((k) => k + 1);
+          if (!silent || totalDropped > 0) {
+            const droppedNote =
+              totalDropped > 0
+                ? ` · ${totalDropped} malformed record${totalDropped === 1 ? '' : 's'} skipped (see console)`
+                : '';
+            const metaPrinted = isPlainObject(cloud.aersMeta)
+              ? String(cloud.aersMeta.printedDateTime || '')
+              : '';
+            const updatedAt = typeof cloud.updatedAt === 'string' ? cloud.updatedAt : '';
+            showToast(
+              totalDropped > 0 ? 'Live Data Loaded with Warnings' : 'Live Data Refreshed',
+              `Loaded ${aersReport.data.length.toLocaleString()} accounts (${metaPrinted || updatedAt || 'Latest'})${droppedNote}.`,
+              totalDropped > 0 ? 'info' : 'success',
+            );
+          }
+        } else if (cloud !== null) {
+          console.warn(
+            `[WG Pulse DataGuard] Expected object payload from cloud sync, got ${describeValueType(cloud)}.`,
+          );
           if (!silent) {
             showToast(
-              'Live Data Refreshed',
-              `Loaded ${cleanAers.length.toLocaleString()} accounts (${cloud.aersMeta?.printedDateTime || cloud.updatedAt || 'Latest'}).`,
-              'success',
+              'Invalid Cloud Snapshot Format',
+              `Expected JSON object payload, received ${describeValueType(cloud)}.`,
+              'error',
             );
           }
         } else if (!silent) {
@@ -381,7 +1215,8 @@ export default function App() {
             'info',
           );
         }
-      } catch {
+      } catch (err) {
+        console.error('[WG Pulse DataGuard] Cloud sync failed:', err);
         if (!silent) {
           showToast(
             'Sync Failed',
@@ -407,6 +1242,7 @@ export default function App() {
     openingBaseline?: OpeningOfficerBaseline | null;
     trackedContracts?: TrackedContract[];
     monthlySnapshots?: MonthlySnapshot[];
+    staffAssignments?: StaffAssignedContract[];
   }) => {
     const ghToken = getSavedGithubToken();
     if (!ghToken) return false;
@@ -423,6 +1259,7 @@ export default function App() {
           : openingBaseline,
       trackedContracts: override?.trackedContracts ?? trackedContracts,
       monthlySnapshots: override?.monthlySnapshots ?? monthlySnapshots,
+      staffAssignments: override?.staffAssignments ?? staffAssignments,
     };
 
     await publishLiveCloudData(payload, ghToken);
@@ -516,6 +1353,17 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem(
+        STORAGE_KEYS.STAFF_ASSIGNMENTS,
+        JSON.stringify(staffAssignments),
+      );
+    } catch {
+      // Ignore
+    }
+  }, [staffAssignments]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
         STORAGE_KEYS.NOTIF_PREFS,
         JSON.stringify(notifPrefs),
       );
@@ -571,7 +1419,7 @@ export default function App() {
       return {
         officeTypesCount: safeOffices.length,
         borderlineCount: Number(borderline?.totalCount) || 0,
-        borderlineMinToSave: Number(borderline?.totalMinToSave) || 0,
+        borderlineCapitalAtRisk: Number(borderline?.totalCapitalAtRisk) || 0,
         borderlineEfforts: Number(borderline?.totalBorderlineEfforts) || 0,
         worstCount: worstTotal,
       };
@@ -579,7 +1427,7 @@ export default function App() {
       return {
         officeTypesCount: 0,
         borderlineCount: 0,
-        borderlineMinToSave: 0,
+        borderlineCapitalAtRisk: 0,
         borderlineEfforts: 0,
         worstCount: 0,
       };
@@ -752,14 +1600,22 @@ export default function App() {
       return;
     }
 
+    const sanitizedAersReport = sanitizeAersListWithReport(
+      parsed.records,
+      `upload:${parsed.metadata?.fileName || 'aers'}`,
+    );
+    const cleanParsedRecords = sanitizedAersReport.data;
+
     const nextMap = new Map<string, AersRecord>();
-    parsed.records.forEach((r) => {
+    cleanParsedRecords.forEach((r) => {
       nextMap.set(normalizeContractNo(r.contractNo), r);
     });
 
-    const effectiveMrpMap = parsed.mrpMap ?? mrpMap;
+    const effectiveMrpMap = parsed.mrpMap
+      ? sanitizeMrpMap(parsed.mrpMap, `upload:${parsed.metadata?.fileName || 'aers'}:mrp`)
+      : mrpMap;
     if (parsed.mrpMap) {
-      setMrpMap(parsed.mrpMap);
+      setMrpMap(effectiveMrpMap);
     }
 
     const syncResult = syncTrackedContractsWithAers(
@@ -772,18 +1628,25 @@ export default function App() {
       },
     );
 
-    const nextBaseline =
+    const nextBaseline = sanitizeOpeningBaseline(
       parsed.excelOfficerOpeningBaseline ??
-      buildOpeningOfficerBaseline(
-        parsed.records,
-        parsed.metadata.printedDateTime,
-      );
+        buildOpeningOfficerBaseline(
+          cleanParsedRecords,
+          parsed.metadata.printedDateTime,
+        ),
+      'upload:openingBaseline',
+    );
     setOpeningBaseline(nextBaseline);
 
+    const cleanSyncedContracts = sanitizeTrackedList(
+      syncResult.updatedContracts,
+      'upload:syncedTrackedContracts',
+    );
+
     setRegularContractNos(new Set(parsed.excludedRegularContractNos ?? []));
-    setAersRecords(parsed.records);
+    setAersRecords(cleanParsedRecords);
     setAersMeta(parsed.metadata);
-    setTrackedContracts(syncResult.updatedContracts);
+    setTrackedContracts(cleanSyncedContracts);
     setAnimKey((k) => k + 1);
 
     const idx = monthlySnapshots.findIndex(
@@ -802,11 +1665,11 @@ export default function App() {
     let cloudNote = ' · Saved locally (Add GitHub Token in Admin to publish live to everyone)';
     try {
       const published = await pushToLiveCloudIfConfigured({
-        aersRecords: parsed.records,
+        aersRecords: cleanParsedRecords,
         aersMeta: parsed.metadata,
         mrpMap: effectiveMrpMap,
         openingBaseline: nextBaseline,
-        trackedContracts: syncResult.updatedContracts,
+        trackedContracts: cleanSyncedContracts,
         monthlySnapshots: nextSnapshots,
       });
       if (published) {
@@ -1043,6 +1906,81 @@ export default function App() {
     );
   };
 
+  const handleAssignStaffBulk = (newItems: StaffAssignedContract[]) => {
+    if (newItems.length === 0) return;
+    setStaffAssignments((prev) => {
+      const incomingKeys = new Set(
+        newItems.map((item) => `${item.monthKey}::${normalizeContractNo(item.contractNo)}`),
+      );
+      const retained = prev.filter(
+        (existing) =>
+          !incomingKeys.has(
+            `${existing.monthKey}::${normalizeContractNo(existing.contractNo)}`,
+          ),
+      );
+      const next = [...newItems, ...retained];
+      if (isAdmin) {
+        pushToLiveCloudIfConfigured({ staffAssignments: next }).catch(() => {});
+      }
+      return next;
+    });
+    const targetStaff = newItems[0]?.staffName ?? 'Staff';
+    const targetMonth = newItems[0]?.monthKey ?? '';
+    showToast(
+      'Follow-Up Contracts Assigned',
+      `Assigned ${newItems.length} contract${newItems.length === 1 ? '' : 's'} to ${targetStaff} (${targetMonth}).`,
+      'success',
+    );
+  };
+
+  const handleRemoveStaffAssignment = (
+    staffName: string,
+    monthKey: string,
+    contractNo: string,
+  ) => {
+    const norm = normalizeContractNo(contractNo);
+    setStaffAssignments((prev) => {
+      const next = prev.filter(
+        (item) =>
+          !(
+            item.staffName === staffName &&
+            item.monthKey === monthKey &&
+            normalizeContractNo(item.contractNo) === norm
+          ),
+      );
+      if (isAdmin) {
+        pushToLiveCloudIfConfigured({ staffAssignments: next }).catch(() => {});
+      }
+      return next;
+    });
+    showToast(
+      'Assignment Removed',
+      `Removed ${contractNo} from ${staffName} (${monthKey}).`,
+      'info',
+    );
+  };
+
+  const handleClearStaffMonth = (staffName: string, monthKey: string) => {
+    setStaffAssignments((prev) => {
+      const next = prev.filter((item) => {
+        if (item.monthKey !== monthKey) return true;
+        if (staffName === 'ALL') return false;
+        return item.staffName !== staffName;
+      });
+      if (isAdmin) {
+        pushToLiveCloudIfConfigured({ staffAssignments: next }).catch(() => {});
+      }
+      return next;
+    });
+    showToast(
+      'Assignments Cleared',
+      staffName === 'ALL'
+        ? `Cleared all staff assignments for ${monthKey}.`
+        : `Cleared ${staffName}'s assignments for ${monthKey}.`,
+      'info',
+    );
+  };
+
   const handleExportBackup = () => {
     const payload: BackupPayload = {
       version: 3,
@@ -1052,6 +1990,7 @@ export default function App() {
       aersMeta,
       aersMasterList: aersRecords,
       openingBaseline,
+      staffAssignments,
       notificationPrefs: notifPrefs,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -1074,31 +2013,89 @@ export default function App() {
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as Partial<BackupPayload>;
-      if (!Array.isArray(parsed.trackedContracts)) {
-        throw new Error('Invalid backup file: missing trackedContracts.');
+      if (!isPlainObject(parsed) || !Array.isArray(parsed.trackedContracts)) {
+        throw new Error(
+          `Invalid backup file: expected object with trackedContracts array, got ${describeValueType(parsed)}.`,
+        );
       }
-      setTrackedContracts(sanitizeTrackedList(parsed.trackedContracts));
-      if (Array.isArray(parsed.monthlySnapshots)) {
-        setMonthlySnapshots(parsed.monthlySnapshots);
+
+      const trackedReport = sanitizeTrackedListWithReport(
+        parsed.trackedContracts,
+        `backup:${file.name}:trackedContracts`,
+      );
+      setTrackedContracts(trackedReport.data);
+
+      let totalDropped = trackedReport.droppedCount;
+      let restoredSnapCount = 0;
+
+      if (parsed.monthlySnapshots !== undefined) {
+        const snapReport = sanitizeSnapshotsListWithReport(
+          parsed.monthlySnapshots,
+          `backup:${file.name}:monthlySnapshots`,
+        );
+        setMonthlySnapshots(snapReport.data);
+        restoredSnapCount = snapReport.data.length;
+        totalDropped += snapReport.droppedCount;
       }
-      if (Array.isArray(parsed.aersMasterList)) {
-        setAersRecords(sanitizeAersList(parsed.aersMasterList));
+
+      if (parsed.aersMasterList !== undefined) {
+        const aersReport = sanitizeAersListWithReport(
+          parsed.aersMasterList,
+          `backup:${file.name}:aersMasterList`,
+        );
+        setAersRecords(aersReport.data);
+        totalDropped += aersReport.droppedCount;
       }
+
       if (parsed.aersMeta !== undefined) {
-        setAersMeta(parsed.aersMeta);
+        setAersMeta(
+          isPlainObject(parsed.aersMeta)
+            ? (parsed.aersMeta as unknown as AersMetadata)
+            : null,
+        );
       }
+
       if (parsed.openingBaseline !== undefined) {
-        setOpeningBaseline(parsed.openingBaseline);
+        setOpeningBaseline(
+          sanitizeOpeningBaseline(
+            parsed.openingBaseline,
+            `backup:${file.name}:openingBaseline`,
+          ),
+        );
       }
-      if (parsed.notificationPrefs) {
-        setNotifPrefs(parsed.notificationPrefs);
+
+      if (parsed.staffAssignments !== undefined) {
+        const staffReport = sanitizeStaffAssignmentsWithReport(
+          parsed.staffAssignments,
+          `backup:${file.name}:staffAssignments`,
+        );
+        setStaffAssignments(staffReport.data);
+        totalDropped += staffReport.droppedCount;
       }
+
+      if (isPlainObject(parsed.notificationPrefs)) {
+        setNotifPrefs({
+          enabled: Boolean(parsed.notificationPrefs.enabled),
+          soundEnabled: Boolean(parsed.notificationPrefs.soundEnabled),
+          hourlyReminder: Boolean(parsed.notificationPrefs.hourlyReminder),
+          lastNotifiedAt:
+            typeof parsed.notificationPrefs.lastNotifiedAt === 'string'
+              ? parsed.notificationPrefs.lastNotifiedAt
+              : undefined,
+        });
+      }
+
+      const droppedNote =
+        totalDropped > 0
+          ? ` (${totalDropped} malformed record${totalDropped === 1 ? '' : 's'} skipped — see console)`
+          : '';
       showToast(
-        'Backup Restored',
-        `Restored ${parsed.trackedContracts.length} tracked contracts and ${parsed.monthlySnapshots?.length ?? 0} snapshots.`,
-        'success',
+        totalDropped > 0 ? 'Backup Restored with Warnings' : 'Backup Restored',
+        `Restored ${trackedReport.data.length} tracked contracts and ${restoredSnapCount} snapshots${droppedNote}.`,
+        totalDropped > 0 ? 'info' : 'success',
       );
     } catch (err) {
+      console.error('[WG Pulse DataGuard] Backup restore failed:', err);
       const msg =
         err instanceof Error ? err.message : 'Failed to parse JSON backup.';
       showToast('Restore Failed', msg, 'error');
@@ -1128,6 +2125,7 @@ export default function App() {
     setOpeningBaseline(null);
     setTrackedContracts([]);
     setMonthlySnapshots([]);
+    setStaffAssignments([]);
     setSelectedOfficer('ALL');
     localStorage.removeItem(STORAGE_KEYS.AERS_MASTER);
     localStorage.removeItem(STORAGE_KEYS.AERS_META);
@@ -1135,6 +2133,7 @@ export default function App() {
     localStorage.removeItem(STORAGE_KEYS.OPENING_BASELINE);
     localStorage.removeItem(STORAGE_KEYS.TRACKED);
     localStorage.removeItem(STORAGE_KEYS.SNAPSHOTS);
+    localStorage.removeItem(STORAGE_KEYS.STAFF_ASSIGNMENTS);
 
     await pushToLiveCloudIfConfigured({
       aersRecords: [],
@@ -1143,6 +2142,7 @@ export default function App() {
       openingBaseline: null,
       trackedContracts: [],
       monthlySnapshots: [],
+      staffAssignments: [],
     }).catch(() => {});
 
     showToast(
@@ -1585,7 +2585,7 @@ export default function App() {
                         <div className="mt-1 text-lg sm:text-xl font-bold font-mono text-amber-200">
                           {strategySummary.borderlineCount}{' '}
                           <span className="text-xs font-normal text-amber-300/80 block sm:inline">
-                            · {formatCompactRs(strategySummary.borderlineMinToSave)}
+                            · {formatCompactRs(strategySummary.borderlineCapitalAtRisk)}
                           </span>
                         </div>
                       </button>
@@ -1685,7 +2685,7 @@ export default function App() {
                 </div>
               </section>
 
-              <SectionSafeBoundary name="Executive Officer Hub">
+              <SectionSafeBoundary name="Executive Officer Hub" resetKey={animKey}>
                 <ExecutiveOfficerHubPanel
                   aersRecords={aersRecords}
                   aersMeta={aersMeta}
@@ -1699,7 +2699,7 @@ export default function App() {
                 />
               </SectionSafeBoundary>
 
-              <SectionSafeBoundary name="KPI Strip">
+              <SectionSafeBoundary name="KPI Strip" resetKey={animKey}>
                 <KpiStrip
                   contracts={visibleTrackedContracts}
                   aersRecords={visibleAersRecords}
@@ -1708,7 +2708,7 @@ export default function App() {
                 />
               </SectionSafeBoundary>
 
-              <SectionSafeBoundary name="Trends Evaluation">
+              <SectionSafeBoundary name="Trends Evaluation" resetKey={animKey}>
                 <TrendsEvaluationPanel
                   trackedContracts={visibleTrackedContracts}
                   aersRecords={visibleAersRecords}
@@ -1724,7 +2724,7 @@ export default function App() {
                 />
               </SectionSafeBoundary>
 
-              <SectionSafeBoundary name="Tracking Table">
+              <SectionSafeBoundary name="Tracking Table" resetKey={animKey}>
                 <TrackingTable
                   contracts={visibleTrackedContracts}
                   mrpMap={mrpMap}
@@ -1758,7 +2758,7 @@ export default function App() {
                 />
               </SectionSafeBoundary>
 
-              <SectionSafeBoundary name="Analytics Charts">
+              <SectionSafeBoundary name="Analytics Charts" resetKey={animKey}>
                 <AnalyticsCharts
                   contracts={visibleTrackedContracts}
                   aersRecords={visibleAersRecords}
@@ -1785,28 +2785,32 @@ export default function App() {
           )}
 
           {activeNav === 'borderline' && (
-            <NextMonthBorderlineCardsPanel
-              trackedContracts={visibleTrackedContracts}
-              aersRecords={visibleAersRecords}
-              mrpMap={mrpMap}
-              onAddFromMaster={handleAddFromMaster}
-              onLogVisit={(c) =>
-                setContractModalState({
-                  isOpen: true,
-                  mode: 'log_visit',
-                  contract: c,
-                })
-              }
-            />
+            <SectionSafeBoundary name="Next Month Borderline" resetKey={animKey}>
+              <NextMonthBorderlineCardsPanel
+                trackedContracts={visibleTrackedContracts}
+                aersRecords={visibleAersRecords}
+                mrpMap={mrpMap}
+                onAddFromMaster={handleAddFromMaster}
+                onLogVisit={(c) =>
+                  setContractModalState({
+                    isOpen: true,
+                    mode: 'log_visit',
+                    contract: c,
+                  })
+                }
+              />
+            </SectionSafeBoundary>
           )}
 
           {activeNav === 'worst' && (
-            <WorstCasePanel
-              trackedContracts={visibleTrackedContracts}
-              aersRecords={visibleAersRecords}
-              mrpMap={mrpMap}
-              onAddFromMaster={handleAddFromMaster}
-            />
+            <SectionSafeBoundary name="Worst Case Radar" resetKey={animKey}>
+              <WorstCasePanel
+                trackedContracts={visibleTrackedContracts}
+                aersRecords={visibleAersRecords}
+                mrpMap={mrpMap}
+                onAddFromMaster={handleAddFromMaster}
+              />
+            </SectionSafeBoundary>
           )}
 
           {activeNav === 'tools' && (
@@ -1817,6 +2821,31 @@ export default function App() {
                   aria-label="Recovery Tools Menu"
                   className="inline-flex flex-wrap items-center gap-1 p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs"
                 >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={toolsSubTab === 'staff_monitor'}
+                    onClick={() => setToolsSubTab('staff_monitor')}
+                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                      toolsSubTab === 'staff_monitor'
+                        ? 'bg-blue-600 text-white'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <ClipboardCheck className="w-3.5 h-3.5" />
+                    Staff Follow-Up &amp; Performance
+                    {staffAssignments.length > 0 && (
+                      <span
+                        className={`ml-1 px-1.5 py-0.5 text-[10px] font-mono rounded-md ${
+                          toolsSubTab === 'staff_monitor'
+                            ? 'bg-white/20 text-white'
+                            : 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
+                        }`}
+                      >
+                        {staffAssignments.length}
+                      </span>
+                    )}
+                  </button>
                   <button
                     type="button"
                     role="tab"
@@ -1891,58 +2920,80 @@ export default function App() {
                 </span>
               </div>
 
+              {toolsSubTab === 'staff_monitor' && (
+                <SectionSafeBoundary name="Staff Follow-Up Monitor" resetKey={animKey}>
+                  <StaffFollowUpMonitorPanel
+                    aersRecords={aersRecords}
+                    trackedContracts={trackedContracts}
+                    assignments={staffAssignments}
+                    isDark={isDark}
+                    onAssignBulk={handleAssignStaffBulk}
+                    onRemoveAssignment={handleRemoveStaffAssignment}
+                    onClearStaffMonth={handleClearStaffMonth}
+                  />
+                </SectionSafeBoundary>
+              )}
+
               {toolsSubTab === 'office_breakdown' && (
-                <OfficeTypeBreakdownPanel
-                  trackedContracts={visibleTrackedContracts}
-                  aersRecords={visibleAersRecords}
-                  title="Office Type -> Officer Strategy Breakdown (NPL & Borderline)"
-                />
+                <SectionSafeBoundary name="Office Type Breakdown" resetKey={animKey}>
+                  <OfficeTypeBreakdownPanel
+                    trackedContracts={visibleTrackedContracts}
+                    aersRecords={visibleAersRecords}
+                    title="Office Type -> Officer Strategy Breakdown (NPL & Borderline)"
+                  />
+                </SectionSafeBoundary>
               )}
 
               {toolsSubTab === 'bm_analytics' && (
-                <BmPortfolioAnalyticsPanel
-                  aersRecords={visibleAersRecords}
-                  aersMeta={aersMeta}
-                  mrpMap={mrpMap}
-                  trackedContracts={visibleTrackedContracts}
-                  monthlySnapshots={monthlySnapshots}
-                  isDark={isDark}
-                  onAddFromMaster={handleAddFromMaster}
-                  onLogVisit={(c) =>
-                    setContractModalState({
-                      isOpen: true,
-                      mode: 'log_visit',
-                      contract: c,
-                    })
-                  }
-                />
+                <SectionSafeBoundary name="BM Portfolio Analytics" resetKey={animKey}>
+                  <BmPortfolioAnalyticsPanel
+                    aersRecords={visibleAersRecords}
+                    aersMeta={aersMeta}
+                    mrpMap={mrpMap}
+                    trackedContracts={visibleTrackedContracts}
+                    monthlySnapshots={monthlySnapshots}
+                    isDark={isDark}
+                    onAddFromMaster={handleAddFromMaster}
+                    onLogVisit={(c) =>
+                      setContractModalState({
+                        isOpen: true,
+                        mode: 'log_visit',
+                        contract: c,
+                      })
+                    }
+                  />
+                </SectionSafeBoundary>
               )}
 
               {toolsSubTab === 'ai' && (
-                <AiRecoveryAgentPanel
-                  trackedContracts={visibleTrackedContracts}
-                  aersRecords={visibleAersRecords}
-                  aersMeta={aersMeta}
-                  openingBaseline={openingBaseline}
-                />
+                <SectionSafeBoundary name="AI Recovery Agent" resetKey={animKey}>
+                  <AiRecoveryAgentPanel
+                    trackedContracts={visibleTrackedContracts}
+                    aersRecords={visibleAersRecords}
+                    aersMeta={aersMeta}
+                    openingBaseline={openingBaseline}
+                  />
+                </SectionSafeBoundary>
               )}
 
               {toolsSubTab === 'alerts' && (
-                <AlertsNotificationsPanel
-                  contracts={visibleTrackedContracts}
-                  prefs={notifPrefs}
-                  permissionState={permissionState}
-                  onUpdatePrefs={setNotifPrefs}
-                  onRequestPermission={handleRequestNotifPermission}
-                  onTestPopup={handleTestPopup}
-                  onLogVisit={(c) =>
-                    setContractModalState({
-                      isOpen: true,
-                      mode: 'log_visit',
-                      contract: c,
-                    })
-                  }
-                />
+                <SectionSafeBoundary name="Alerts & Notifications" resetKey={animKey}>
+                  <AlertsNotificationsPanel
+                    contracts={visibleTrackedContracts}
+                    prefs={notifPrefs}
+                    permissionState={permissionState}
+                    onUpdatePrefs={setNotifPrefs}
+                    onRequestPermission={handleRequestNotifPermission}
+                    onTestPopup={handleTestPopup}
+                    onLogVisit={(c) =>
+                      setContractModalState({
+                        isOpen: true,
+                        mode: 'log_visit',
+                        contract: c,
+                      })
+                    }
+                  />
+                </SectionSafeBoundary>
               )}
             </div>
           )}
@@ -1987,24 +3038,28 @@ export default function App() {
               </div>
 
               {settingsSubTab === 'lookup' ? (
-                <AersLookupPanel
-                  aersRecords={aersRecords}
-                  aersMeta={aersMeta}
-                  mrpMap={mrpMap}
-                  trackedContractNos={trackedContractNos}
-                  onUploadAersFile={handleUploadAersFile}
-                  onAddFromMaster={handleAddFromMaster}
-                />
+                <SectionSafeBoundary name="AERS Master Lookup" resetKey={animKey}>
+                  <AersLookupPanel
+                    aersRecords={aersRecords}
+                    aersMeta={aersMeta}
+                    mrpMap={mrpMap}
+                    trackedContractNos={trackedContractNos}
+                    onUploadAersFile={handleUploadAersFile}
+                    onAddFromMaster={handleAddFromMaster}
+                  />
+                </SectionSafeBoundary>
               ) : (
-                <BackupSettingsPanel
-                  trackedCount={trackedContracts.length}
-                  snapshotsCount={monthlySnapshots.length}
-                  aersMeta={aersMeta}
-                  isAdminAuthenticated={isAdmin}
-                  onOpenAdminModal={() => setAdminModalOpen(true)}
-                  onExportBackup={handleExportBackup}
-                  onRestoreBackup={handleRestoreBackup}
-                />
+                <SectionSafeBoundary name="Backup & Settings" resetKey={animKey}>
+                  <BackupSettingsPanel
+                    trackedCount={trackedContracts.length}
+                    snapshotsCount={monthlySnapshots.length}
+                    aersMeta={aersMeta}
+                    isAdminAuthenticated={isAdmin}
+                    onOpenAdminModal={() => setAdminModalOpen(true)}
+                    onExportBackup={handleExportBackup}
+                    onRestoreBackup={handleRestoreBackup}
+                  />
+                </SectionSafeBoundary>
               )}
             </div>
           )}

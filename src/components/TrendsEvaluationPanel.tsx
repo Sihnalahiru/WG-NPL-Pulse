@@ -127,7 +127,6 @@ export function TrendsEvaluationPanel({
         borderSavedCount: acc.borderSavedCount + r.borderSavedCount,
         borderSavedAmount: acc.borderSavedAmount + r.borderSavedAmount,
         borderlineCount: acc.borderlineCount + r.borderlineCount,
-        borderlineMinToSave: acc.borderlineMinToSave + r.borderlineMinToSave,
         borderlineEfforts: acc.borderlineEfforts + r.borderlineEfforts,
         zeroEffortBorderlineCount:
           acc.zeroEffortBorderlineCount + r.zeroEffortBorderlineCount,
@@ -151,7 +150,6 @@ export function TrendsEvaluationPanel({
         borderSavedCount: 0,
         borderSavedAmount: 0,
         borderlineCount: 0,
-        borderlineMinToSave: 0,
         borderlineEfforts: 0,
         zeroEffortBorderlineCount: 0,
         worstCount: 0,
@@ -178,7 +176,7 @@ export function TrendsEvaluationPanel({
               Daily Age Evaluation &amp; Borderline Risk Engine
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-              Age buckets, next-month borderline save targets, and per-officer Opening vs. Closing tables update automatically when you upload an AERS report.
+              Age buckets, next-month borderline exposure, and per-officer Opening vs. Closing tables update automatically when you upload an AERS report.
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 dark:text-slate-300 tabular-nums">
               <span>
@@ -296,7 +294,7 @@ export function TrendsEvaluationPanel({
                       formatter={(
                         value: unknown,
                         _name: unknown,
-                        props: { payload?: { closingDebtor?: number; minToSave?: number } },
+                        props: { payload?: { closingDebtor?: number } },
                       ) => {
                         const debtor = props?.payload?.closingDebtor ?? 0;
                         return [
@@ -374,13 +372,13 @@ export function TrendsEvaluationPanel({
 
               <div className="p-3.5 rounded-lg bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900">
                 <div className="text-[11px] font-medium text-blue-800 dark:text-blue-300">
-                  Min Needed to Save All
+                  Borderline Closing Debtor
                 </div>
                 <div className="mt-1 text-lg font-bold font-mono text-blue-900 dark:text-blue-200">
-                  {formatCurrencyRs(borderlineAnalysis.totalMinToSave)}
+                  {formatCurrencyRs(borderlineAnalysis.totalDebtorAtRisk)}
                 </div>
                 <div className="mt-1 text-[11px] text-blue-700 dark:text-blue-400">
-                  Target collection to hold &lt; 91 DPD
+                  Total debtor balance in 61–90 DPD
                 </div>
               </div>
 
@@ -405,15 +403,18 @@ export function TrendsEvaluationPanel({
             {borderlineAnalysis.totalCount > 0 ? (
               <div className="space-y-1.5">
                 <div>
-                  Collecting{' '}
                   <strong className="font-mono text-slate-900 dark:text-slate-100">
-                    {formatCurrencyRs(borderlineAnalysis.totalMinToSave)}
+                    {borderlineAnalysis.totalCount}
                   </strong>{' '}
-                  across {borderlineAnalysis.totalCount} borderline accounts prevents{' '}
+                  borderline accounts currently hold{' '}
                   <strong className="font-mono text-slate-900 dark:text-slate-100">
                     {formatCurrencyRs(borderlineAnalysis.totalCapitalAtRisk)}
                   </strong>{' '}
-                  (Capital + Arrears) from converting to 91+ DPD NPL.
+                  (Capital + Arrears) projected NPL exposure across{' '}
+                  <strong className="font-mono text-slate-900 dark:text-slate-100">
+                    {formatCurrencyRs(borderlineAnalysis.totalDebtorAtRisk)}
+                  </strong>{' '}
+                  closing debtor before month-end.
                 </div>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono">
                   <span className="text-emerald-700 dark:text-emerald-400">
@@ -515,7 +516,6 @@ export function TrendsEvaluationPanel({
                   <th className="py-2.5 px-3 text-right">Next Border</th>
                   <th className="py-2.5 px-3 text-right">Efforts</th>
                   <th className="py-2.5 px-3 text-right">Worst (W)</th>
-                  <th className="py-2.5 px-3 text-right">Min Save</th>
                   <th className="py-2.5 px-4 text-right">NPL Net Variance</th>
                 </tr>
               </thead>
@@ -599,9 +599,6 @@ export function TrendsEvaluationPanel({
                           <span className="text-slate-400">0</span>
                         )}
                       </td>
-                      <td className="py-2.5 px-3 text-right font-mono text-blue-700 dark:text-blue-400">
-                        {formatCompactRs(row.borderlineMinToSave)}
-                      </td>
                       <td
                         className={`py-2.5 px-4 text-right font-mono font-semibold ${
                           improved
@@ -675,9 +672,6 @@ export function TrendsEvaluationPanel({
                   </td>
                   <td className="py-2.5 px-3 text-right font-mono text-red-600 dark:text-red-400">
                     {officerTotals.worstCount}
-                  </td>
-                  <td className="py-2.5 px-3 text-right font-mono text-blue-700 dark:text-blue-400">
-                    {formatCompactRs(officerTotals.borderlineMinToSave)}
                   </td>
                   <td
                     className={`py-2.5 px-4 text-right font-mono ${

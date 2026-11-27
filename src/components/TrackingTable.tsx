@@ -39,6 +39,7 @@ import {
 import { FinancePortfolioIllustration } from './FinanceIllustrations';
 import { PaymentPatternStrip } from './PaymentPatternStrip';
 import { UserAvatar } from './UserAvatar';
+import { WorstCaseProductBadge } from './WorstCaseProductBadge';
 
 interface TrackingTableProps {
   contracts: TrackedContract[];
@@ -330,9 +331,11 @@ export function TrackingTable({
                           </span>
                         )}
                         {isWorst && (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold rounded bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800 whitespace-nowrap">
-                            WORST ({c.nplReason || 'W'})
-                          </span>
+                          <WorstCaseProductBadge
+                            product={c.worstCaseProduct}
+                            nplReason={c.nplReason}
+                            compact={true}
+                          />
                         )}
                       </div>
                       <div className="font-medium text-slate-700 dark:text-slate-200 mt-0.5">

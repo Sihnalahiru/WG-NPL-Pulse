@@ -11,10 +11,12 @@ import type { AersMetadata, AersRecord, MrpEnrichment } from '../types/recovery'
 import {
   downloadSampleAersExcel,
   formatCurrencyRs,
+  isWorstCategory,
   normalizeContractNo,
 } from '../utils/recoveryEngine';
 import { PaymentPatternStrip } from './PaymentPatternStrip';
 import { UserAvatar } from './UserAvatar';
+import { WorstCaseProductBadge } from './WorstCaseProductBadge';
 
 interface AersLookupPanelProps {
   aersRecords: AersRecord[];
@@ -161,8 +163,17 @@ export function AersLookupPanel({
                       className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 align-top"
                     >
                       <td className="py-2.5 px-3">
-                        <div className="font-mono font-semibold text-slate-900 dark:text-slate-100">
-                          {r.contractNo}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                            {r.contractNo}
+                          </span>
+                          {isWorstCategory(r.nplReason, r.worstCaseProduct) && (
+                            <WorstCaseProductBadge
+                              product={r.worstCaseProduct}
+                              nplReason={r.nplReason}
+                              compact={true}
+                            />
+                          )}
                         </div>
                         <PaymentPatternStrip
                           mrp={mrpMap?.get(normNo)}

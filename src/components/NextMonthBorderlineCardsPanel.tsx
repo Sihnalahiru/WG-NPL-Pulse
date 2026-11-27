@@ -4,7 +4,6 @@ import {
   Building2,
   CheckCircle2,
   ClipboardCheck,
-  Flame,
   Plus,
   Search,
   ShieldAlert,
@@ -29,6 +28,7 @@ import {
 } from '../utils/recoveryEngine';
 import { PaymentPatternStrip } from './PaymentPatternStrip';
 import { UserAvatar } from './UserAvatar';
+import { WorstCaseProductBadge } from './WorstCaseProductBadge';
 
 interface NextMonthBorderlineCardsPanelProps {
   trackedContracts: TrackedContract[];
@@ -54,7 +54,6 @@ interface OfficerBorderlineSummary {
   nextMonthCount: number;
   projectedNpl: number;
   debtorAtRisk: number;
-  minToSave: number;
   assignEfforts: number;
   zeroEffortCount: number;
   worstCount: number;
@@ -138,7 +137,6 @@ export function NextMonthBorderlineCardsPanel({
             acc.riskTier === 'Next Month Borderline (61-90)' ? 1 : 0,
           projectedNpl: acc.projectedNpl,
           debtorAtRisk: acc.closingDebtor,
-          minToSave: acc.minToSave,
           assignEfforts: acc.assignOfficerEfforts,
           zeroEffortCount: acc.assignOfficerEfforts <= 0 ? 1 : 0,
           worstCount: acc.isWorst ? 1 : 0,
@@ -155,7 +153,6 @@ export function NextMonthBorderlineCardsPanel({
         }
         existing.projectedNpl += acc.projectedNpl;
         existing.debtorAtRisk += acc.closingDebtor;
-        existing.minToSave += acc.minToSave;
         existing.assignEfforts += acc.assignOfficerEfforts;
         if (acc.assignOfficerEfforts <= 0) existing.zeroEffortCount += 1;
         if (acc.isWorst) existing.worstCount += 1;
@@ -220,7 +217,7 @@ export function NextMonthBorderlineCardsPanel({
           acc.nextMonth +
           (item.riskTier === 'Next Month Borderline (61-90)' ? 1 : 0),
         projectedNpl: acc.projectedNpl + item.projectedNpl,
-        minToSave: acc.minToSave + item.minToSave,
+        debtorAtRisk: acc.debtorAtRisk + item.closingDebtor,
         efforts: acc.efforts + item.assignOfficerEfforts,
         zeroEffort: acc.zeroEffort + (item.assignOfficerEfforts <= 0 ? 1 : 0),
       }),
@@ -229,7 +226,7 @@ export function NextMonthBorderlineCardsPanel({
         monthEnd: 0,
         nextMonth: 0,
         projectedNpl: 0,
-        minToSave: 0,
+        debtorAtRisk: 0,
         efforts: 0,
         zeroEffort: 0,
       },
@@ -269,7 +266,7 @@ export function NextMonthBorderlineCardsPanel({
                 <strong className="font-semibold text-slate-800 dark:text-slate-200">
                   &lt; 91 DPD
                 </strong>{' '}
-                account crossing into NPL this month-end or next month (+30d), with projected Capital + Arrears NPL impact and minimum save payments.
+                account crossing into NPL this month-end or next month (+30d), with projected Capital + Arrears NPL impact and live field effort visibility.
               </p>
             </div>
           </div>
@@ -339,13 +336,13 @@ export function NextMonthBorderlineCardsPanel({
 
           <div className="p-3 rounded-xl bg-white/90 dark:bg-slate-950/80 border border-blue-200 dark:border-blue-900/60">
             <div className="text-[11px] font-medium text-blue-800 dark:text-blue-300">
-              Min Payment to Save
+              Closing Debtor at Risk
             </div>
             <div className="mt-0.5 text-lg font-bold font-mono text-blue-900 dark:text-blue-200">
-              {formatCompactRs(filteredTotals.minToSave)}
+              {formatCompactRs(filteredTotals.debtorAtRisk)}
             </div>
             <div className="text-[10px] text-blue-700 dark:text-blue-400">
-              Target collection &lt; 91 DPD
+              Total debtor balance &lt; 91 DPD
             </div>
           </div>
 
@@ -582,10 +579,10 @@ export function NextMonthBorderlineCardsPanel({
                       </div>
                       <div className="text-right">
                         <span className="text-slate-500 dark:text-slate-400 block">
-                          Min Save
+                          Closing Debtor
                         </span>
                         <span className="font-mono font-semibold text-blue-700 dark:text-blue-400">
-                          {formatCompactRs(person.minToSave)}
+                          {formatCompactRs(person.debtorAtRisk)}
                         </span>
                       </div>
                     </div>
@@ -637,9 +634,9 @@ export function NextMonthBorderlineCardsPanel({
               </strong>
             </span>
             <span>
-              Target Min Save:{' '}
+              Closing Debtor:{' '}
               <strong className="font-mono text-blue-700 dark:text-blue-400">
-                {formatCurrencyRs(activeOfficerSummary.minToSave)}
+                {formatCurrencyRs(activeOfficerSummary.debtorAtRisk)}
               </strong>
             </span>
             <span>
@@ -687,10 +684,14 @@ export function NextMonthBorderlineCardsPanel({
                               {item.contractNo}
                             </span>
                             {item.isWorst && (
-                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-bold rounded bg-red-100 text-red-800 border border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800">
-                                <Flame className="w-2.5 h-2.5" />
-                                WORST (W)
-                              </span>
+                              <WorstCaseProductBadge
+                                product={
+                                  masterRec?.worstCaseProduct ??
+                                  trackedRec?.worstCaseProduct
+                                }
+                                nplReason={item.nplReason}
+                                compact={true}
+                              />
                             )}
                           </div>
                           <h3 className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate mt-0.5">
@@ -792,10 +793,10 @@ export function NextMonthBorderlineCardsPanel({
                       </div>
                       <div>
                         <span className="text-[10px] text-slate-500 dark:text-slate-400 block">
-                          Min to Save
+                          Closing Debtor
                         </span>
                         <span className="font-mono font-bold text-blue-700 dark:text-blue-400">
-                          {formatCurrencyRs(item.minToSave)}
+                          {formatCompactRs(item.closingDebtor)}
                         </span>
                       </div>
                       <div className="text-right">
@@ -820,7 +821,12 @@ export function NextMonthBorderlineCardsPanel({
                     {/* Card Footer Actions */}
                     <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/80 dark:border-slate-800">
                       <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                        Debtor: {formatCompactRs(item.closingDebtor)}
+                        Collection:{' '}
+                        {formatCompactRs(
+                          masterRec?.totalCollection ??
+                            trackedRec?.totalCollection ??
+                            0,
+                        )}
                       </span>
 
                       <div className="flex items-center gap-2 shrink-0">

@@ -21,6 +21,7 @@ import {
   normalizeEvaluableFromTracked,
 } from '../utils/recoveryEngine';
 import { PaymentPatternStrip } from './PaymentPatternStrip';
+import { WorstCaseProductBadge, getWorstProductMeta } from './WorstCaseProductBadge';
 
 interface WorstCasePanelProps {
   trackedContracts: TrackedContract[];
@@ -68,6 +69,17 @@ export function WorstCasePanel({
     () => analyzeWorstCategory(evaluableItems),
     [evaluableItems],
   );
+
+  const productSummary = useMemo(() => {
+    const counts = new Map<string, number>();
+    analysis.accounts.forEach((a) => {
+      const code = (a.worstCaseProduct || 'W').trim().toUpperCase() || 'W';
+      counts.set(code, (counts.get(code) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .map(([code, count]) => ({ code, count, meta: getWorstProductMeta(code) }))
+      .sort((a, b) => b.count - a.count);
+  }, [analysis.accounts]);
 
   const filteredAccounts = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -179,25 +191,50 @@ export function WorstCasePanel({
 
       {/* Worst Case Contracts Preview Table */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-        <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              WORST Category Contracts Preview ({filteredAccounts.length})
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Includes all Npl Reason = W contracts across every DPD bracket so high-risk accounts are never missed
-            </p>
+        <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                WORST Category Contracts Preview ({filteredAccounts.length})
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Includes all Npl Reason = W contracts across every DPD bracket with product-matched SVG indicators
+              </p>
+            </div>
+            <div className="relative w-full sm:w-72">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter contract, office type, RO, product..."
+                className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+              />
+            </div>
           </div>
-          <div className="relative w-full sm:w-72">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Filter contract, office type, RO, product..."
-              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
-            />
-          </div>
+
+          {productSummary.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              {productSummary.map((p) => (
+                <button
+                  key={p.code}
+                  type="button"
+                  onClick={() =>
+                    setSearch((prev) =>
+                      prev.trim().toUpperCase() === p.code ? '' : p.code === 'W' ? '' : p.code,
+                    )
+                  }
+                  className="inline-flex items-center gap-1.5 hover:opacity-85 transition-opacity"
+                  title={`Filter by ${p.meta.label}`}
+                >
+                  <WorstCaseProductBadge product={p.code} compact={true} showLabel={true} />
+                  <span className="text-[11px] font-mono font-semibold text-slate-600 dark:text-slate-300 tabular-nums">
+                    ×{p.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {filteredAccounts.length === 0 ? (
@@ -267,15 +304,15 @@ export function WorstCasePanel({
                         </div>
                       </td>
                       <td className="py-2.5 px-3">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800 whitespace-nowrap">
-                          <AlertOctagon className="w-3 h-3 shrink-0" />
-                          WORST ({item.nplReason})
-                        </span>
-                        {item.worstCaseProduct && (
-                          <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                            {item.worstCaseProduct}
-                          </div>
-                        )}
+                        <WorstCaseProductBadge
+                          product={item.worstCaseProduct}
+                          nplReason={item.nplReason}
+                          showLabel={true}
+                        />
+                        <div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                          <AlertOctagon className="w-3 h-3 text-red-500 shrink-0" />
+                          <span>Reason: {item.nplReason || 'W'}</span>
+                        </div>
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono">
                         <span

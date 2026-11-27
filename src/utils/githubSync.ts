@@ -4,6 +4,7 @@ import type {
   MonthlySnapshot,
   MrpEnrichment,
   OpeningOfficerBaseline,
+  StaffAssignedContract,
   TrackedContract,
 } from '../types/recovery';
 
@@ -21,6 +22,7 @@ export interface LiveCloudPayload {
   openingBaseline: OpeningOfficerBaseline | null;
   trackedContracts: TrackedContract[];
   monthlySnapshots: MonthlySnapshot[];
+  staffAssignments?: StaffAssignedContract[];
 }
 
 export function getSavedGithubToken(): string {

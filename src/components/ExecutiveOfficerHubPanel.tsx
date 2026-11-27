@@ -72,6 +72,7 @@ export function ExecutiveOfficerHubPanel({
   const [activeHighlightTab, setActiveHighlightTab] = useState<
     'cards' | 'bulk_monitor' | 'campaign_perf' | 'ai_variance'
   >('cards');
+  const [varianceLang, setVarianceLang] = useState<'both' | 'si' | 'en'>('both');
   const [selectedCampaignMonth, setSelectedCampaignMonth] = useState<string>('ALL');
   const [perfScope, setPerfScope] = useState<'individual' | 'branch'>('individual');
   const [bulkText, setBulkText] = useState('');
@@ -196,14 +197,14 @@ export function ExecutiveOfficerHubPanel({
 
     return officerRows.map((row) => {
       const officerItems = evaluableItems.filter((i) => i && i.officer === row.officer);
-      let borderline = { totalCount: 0, totalCapitalAtRisk: 0, totalMinToSave: 0 };
+      let borderline = { totalCount: 0, totalCapitalAtRisk: 0, totalDebtorAtRisk: 0 };
       try {
         const res = analyzeNextMonthBorderline(officerItems);
         if (res && typeof res === 'object') {
           borderline = {
             totalCount: Number(res.totalCount) || 0,
             totalCapitalAtRisk: Number(res.totalCapitalAtRisk) || 0,
-            totalMinToSave: Number(res.totalMinToSave) || 0,
+            totalDebtorAtRisk: Number(res.totalDebtorAtRisk) || 0,
           };
         }
       } catch {
@@ -230,7 +231,7 @@ export function ExecutiveOfficerHubPanel({
         roleBadge: isMo ? 'MO' : 'RO',
         borderlineCount: borderline.totalCount,
         borderlineAmount: borderline.totalCapitalAtRisk,
-        borderlineMinSave: borderline.totalMinToSave,
+        borderlineDebtor: borderline.totalDebtorAtRisk,
         totalEfforts,
         contactedCount,
         effortCoveragePct,
@@ -270,8 +271,6 @@ export function ExecutiveOfficerHubPanel({
         const dpd = Number(aers?.actualDpd ?? tracked?.actualDpd) || 0;
         const npl = Number(aers?.npl ?? tracked?.npl) || 0;
         const debtor = Number(aers?.closingDebtor ?? tracked?.closingDebtor) || 0;
-        const minSave =
-          Number(aers?.minAmountToReverseNpl ?? tracked?.minAmountToReverseNpl) || 0;
         const progressPct = Math.min(100, Math.round((efforts / 3) * 100));
 
         return {
@@ -282,7 +281,6 @@ export function ExecutiveOfficerHubPanel({
           dpd,
           npl,
           debtor,
-          minSave,
           efforts,
           totalEff,
           progressPct,
@@ -318,7 +316,6 @@ export function ExecutiveOfficerHubPanel({
         dpd: Number(aers.actualDpd) || 0,
         npl: Number(aers.npl) || 0,
         debtor: Number(aers.closingDebtor) || 0,
-        minSave: Number(aers.minAmountToReverseNpl) || 0,
         efforts,
         totalEff: Number(aers.totalEfforts) || 0,
         progressPct,
@@ -337,71 +334,190 @@ export function ExecutiveOfficerHubPanel({
         ? officerCards.find((c) => c.officer === selectedOfficer)
         : null;
 
+    const scopedAers =
+      selectedOfficer === 'ALL'
+        ? safeAers
+        : safeAers.filter((r) => asStr(getOfficerByOfficeType(r)) === selectedOfficer);
+
+    const scopedEval =
+      selectedOfficer === 'ALL'
+        ? evaluableItems
+        : evaluableItems.filter((i) => i && i.officer === selectedOfficer);
+
     const totalOpNpl = officerCards.reduce((s, c) => s + (Number(c.openingNpl) || 0), 0);
     const totalCloseNpl = officerCards.reduce((s, c) => s + (Number(c.closingNpl) || 0), 0);
     const branchNetDelta = totalOpNpl - totalCloseNpl;
 
-    const targetName = activeCard
+    const targetNameEn = activeCard
       ? `${activeCard.officer} (${activeCard.officeType})`
       : 'Entire Branch';
+    const targetNameSi = activeCard
+      ? `${activeCard.officer} (${activeCard.officeType})`
+      : 'සම්පූර්ණ ශාඛාව';
+
     const targetOpNpl = activeCard ? Number(activeCard.openingNpl) || 0 : totalOpNpl;
     const targetCloseNpl = activeCard ? Number(activeCard.closingNpl) || 0 : totalCloseNpl;
     const targetDelta = targetOpNpl - targetCloseNpl;
     const targetBorderlineCount = activeCard
       ? activeCard.borderlineCount
       : officerCards.reduce((s, c) => s + c.borderlineCount, 0);
-    const targetBorderlineMinSave = activeCard
-      ? activeCard.borderlineMinSave
-      : officerCards.reduce((s, c) => s + c.borderlineMinSave, 0);
+    const targetBorderlineExposure = activeCard
+      ? activeCard.borderlineAmount
+      : officerCards.reduce((s, c) => s + c.borderlineAmount, 0);
     const targetZeroEffort = activeCard
       ? Number(activeCard.zeroEffortBorderlineCount) || 0
       : officerCards.reduce((s, c) => s + (Number(c.zeroEffortBorderlineCount) || 0), 0);
+    const targetWorstCount = activeCard
+      ? Number(activeCard.worstCount) || 0
+      : officerCards.reduce((s, c) => s + (Number(c.worstCount) || 0), 0);
+
+    const totalDue = scopedAers.reduce(
+      (s, r) => s + (Number(r.currentMonthDue || r.dueBudgetMonth) || 0),
+      0,
+    );
+    const totalColl = scopedAers.reduce((s, r) => s + (Number(r.totalCollection) || 0), 0);
+    const collRatePct = totalDue > 0 ? Math.round((totalColl / totalDue) * 100) : 0;
+
+    // Pick concrete top-priority contracts so advice is immediately practical
+    const zeroEffortTop = scopedEval
+      .filter((i) => i.actualDpd >= 61 && i.actualDpd < 91 && (Number(i.assignOfficerEfforts) || 0) <= 0)
+      .sort((a, b) => (Number(b.closingDebtor) || 0) - (Number(a.closingDebtor) || 0))
+      .slice(0, 3);
+
+    const borderlineTop = scopedEval
+      .filter((i) => i.actualDpd >= 61 && i.actualDpd < 91)
+      .sort((a, b) => (Number(b.actualDpd) || 0) - (Number(a.actualDpd) || 0))
+      .slice(0, 3);
+
+    const worstTop = scopedEval
+      .filter((i) => i.isWorst)
+      .sort((a, b) => (Number(b.npl) || 0) - (Number(a.npl) || 0))
+      .slice(0, 3);
+
+    const newlySlippedTop = scopedEval
+      .filter((i) => (Number(i.opNpl) || 0) <= 0 && (Number(i.npl) || 0) > 0)
+      .sort((a, b) => (Number(b.npl) || 0) - (Number(a.npl) || 0))
+      .slice(0, 3);
 
     const suggestions: {
       tone: 'positive' | 'warning' | 'critical';
-      title: string;
-      detail: string;
+      priorityEn: string;
+      prioritySi: string;
+      titleEn: string;
+      titleSi: string;
+      detailEn: string;
+      detailSi: string;
+      actionEn: string;
+      actionSi: string;
+      focusContracts: { contractNo: string; label: string }[];
     }[] = [];
 
+    // 1. NPL Position (Saved vs Increased)
     if (targetDelta >= 0) {
       suggestions.push({
         tone: 'positive',
-        title: `Plus (+) NPL Variance: +${formatCompactRs(targetDelta)} Saved`,
-        detail: `${targetName} has reduced Opening NPL from ${formatCompactRs(targetOpNpl)} down to ${formatCompactRs(targetCloseNpl)}. Maintain daily PTP follow-ups to lock month-end gains.`,
+        priorityEn: 'On Track',
+        prioritySi: 'හොඳ ප්‍රගතියක්',
+        titleEn: `NPL Reduced by ${formatCompactRs(targetDelta)}`,
+        titleSi: `NPL මුදල ${formatCompactRs(targetDelta)} කින් අඩු කර ඇත`,
+        detailEn: `${targetNameEn} lowered NPL from ${formatCompactRs(targetOpNpl)} down to ${formatCompactRs(targetCloseNpl)}. Current due collection stands at ${collRatePct}% (${formatCompactRs(totalColl)}).`,
+        detailSi: `${targetNameSi} මුල් NPL (${formatCompactRs(targetOpNpl)}) දැනට ${formatCompactRs(targetCloseNpl)} දක්වා අඩු කර ඇත. මේ මාසයේ දැනට එකතු කර ඇති මුදල ${formatCompactRs(totalColl)} (${collRatePct}%) කි.`,
+        actionEn: 'Lock in today’s Promise-to-Pay (PTP) calls and collect full arrears + charges before month-end so recovered accounts do not slip back.',
+        actionSi: 'අද දින පොරොන්දු වූ ගෙවීම් (PTP) ලබා ගෙන, මාසය අවසානයට පෙර බේරා ගත් ගිණුම් නැවත NPL නොවීමට දිනපතා පසු විපරම් කරන්න.',
+        focusContracts: newlySlippedTop.map((c) => ({
+          contractNo: c.contractNo,
+          label: `${c.actualDpd} DPD · ${formatCompactRs(c.npl)}`,
+        })),
       });
     } else {
       suggestions.push({
         tone: 'critical',
-        title: `Minus (-) NPL Variance: -${formatCompactRs(Math.abs(targetDelta))} Net Slippage`,
-        detail: `${targetName} Closing NPL (${formatCompactRs(targetCloseNpl)}) exceeded Opening NPL (${formatCompactRs(targetOpNpl)}). Prioritize immediate arrears collection on newly slipped 91+ DPD accounts.`,
+        priorityEn: 'Urgent Recovery',
+        prioritySi: 'හදිසි අවධානය',
+        titleEn: `NPL Increased by ${formatCompactRs(Math.abs(targetDelta))}`,
+        titleSi: `NPL මුදල ${formatCompactRs(Math.abs(targetDelta))} කින් වැඩි වී ඇත`,
+        detailEn: `${targetNameEn} moved from ${formatCompactRs(targetOpNpl)} to ${formatCompactRs(targetCloseNpl)}. Newly slipped 91+ DPD accounts are pulling the portfolio down.`,
+        detailSi: `${targetNameSi} හි මුල් NPL (${formatCompactRs(targetOpNpl)}) දැනට ${formatCompactRs(targetCloseNpl)} දක්වා ඉහළ ගොස් ඇත. අලුතින් 91+ DPD වූ ගිණුම් නිසා මෙම වැඩිවීම සිදු වී ඇත.`,
+        actionEn: 'Visit newly slipped 91+ DPD clients first today; confirm full arrears + DI/charges with the branch cashier before requesting payment.',
+        actionSi: 'අලුතින් 91+ DPD වූ ගනුදෙනුකරුවන් හමු වී, DI සහ ගාස්තු ඇතුළු සම්පූර්ණ හිඟ මුදල පරීක්ෂා කර අදම ගෙවීම් ලබා ගැනීමට ක්‍රියා කරන්න.',
+        focusContracts: newlySlippedTop.map((c) => ({
+          contractNo: c.contractNo,
+          label: `${c.actualDpd} DPD · NPL ${formatCompactRs(c.npl)}`,
+        })),
       });
     }
 
+    // 2. Borderline Prevention (No minimum amount — uses real Capital+Arrears exposure)
     if (targetBorderlineCount > 0) {
       suggestions.push({
         tone: 'warning',
-        title: `Save ${targetBorderlineCount} Borderline Accounts with ${formatCompactRs(targetBorderlineMinSave)}`,
-        detail: `Collecting the minimum reversal amount (${formatCompactRs(targetBorderlineMinSave)}) before the 30th prevents forward bucket slippage into NPL.`,
+        priorityEn: 'Month-End Shield',
+        prioritySi: 'මාස අග ආරක්ෂාව',
+        titleEn: `Protect ${targetBorderlineCount} Borderline Accounts (${formatCompactRs(targetBorderlineExposure)} Exposure)`,
+        titleSi: `Borderline ගිණුම් ${targetBorderlineCount} ක් NPL වීම වළක්වන්න (${formatCompactRs(targetBorderlineExposure)})`,
+        detailEn: `${targetBorderlineCount} accounts in the 61–90 DPD bracket will cross 91 DPD if unpaid. Saving them prevents ${formatCompactRs(targetBorderlineExposure)} in new NPL.`,
+        detailSi: `61–90 DPD මට්ටමේ ඇති ගිණුම් ${targetBorderlineCount} කට ගෙවීම් නොලැබුණහොත් මාසය අවසානයේ NPL වී ${formatCompactRs(targetBorderlineExposure)} ක් අලුතින් එකතු වේ.`,
+        actionEn: 'Check live system payoff/arrears (including DI & recovery charges) for the highest DPD accounts below and secure a confirmed payment date.',
+        actionSi: 'පහත වැඩිම DPD ඇති ගිණුම් වල DI සහ අනෙකුත් ගාස්තු ඇතුළු නියම හිඟ මුදල පද්ධතියෙන් බලා, මාසය අවසානයට පෙර ගෙවීමක් තහවුරු කර ගන්න.',
+        focusContracts: borderlineTop.map((c) => ({
+          contractNo: c.contractNo,
+          label: `${c.actualDpd} DPD · Debtor ${formatCompactRs(c.closingDebtor)}`,
+        })),
       });
     }
 
+    // 3. Zero-Effort Action or Worst Case Priority
     if (targetZeroEffort > 0) {
       suggestions.push({
         tone: 'critical',
-        title: `${targetZeroEffort} Borderline Accounts Have Zero (0) Officer Efforts`,
-        detail: `Immediate call/field visit action required on uncontacted 61–90 DPD accounts to secure Promise-to-Pay (PTP) commitments.`,
+        priorityEn: 'Call First Today',
+        prioritySi: 'අදම අමතන්න',
+        titleEn: `${targetZeroEffort} Borderline Accounts Have 0 Calls / Visits`,
+        titleSi: `Borderline ගිණුම් ${targetZeroEffort} කට තවම කිසිදු කෝල්/විසිට් එකක් නැත`,
+        detailEn: `These 61–90 DPD accounts have zero recorded officer efforts so far this month and carry the highest risk of silent slippage.`,
+        detailSi: `61–90 DPD මට්ටමේ ඇති මෙම ගිණුම් ${targetZeroEffort} ට මේ මාසයේ කිසිදු දුරකථන ඇමතුමක් හෝ ක්ෂේත්‍ර පරීක්ෂාවක් සටහන් වී නැත.`,
+        actionEn: 'Assign phone follow-ups immediately or schedule a field visit today and log the customer’s exact PTP date in the Watchlist.',
+        actionSi: 'අද උදෑසනම මෙම ගිණුම් වලට කෝල් කර හෝ නිවසට ගොස් ගනුදෙනුකරු සම්බන්ධ කරගෙන ගෙවන දිනය (P/P Date) සටහන් කරන්න.',
+        focusContracts: zeroEffortTop.map((c) => ({
+          contractNo: c.contractNo,
+          label: `${c.actualDpd} DPD · 0 Efforts`,
+        })),
+      });
+    } else if (targetWorstCount > 0) {
+      suggestions.push({
+        tone: 'warning',
+        priorityEn: 'Worst Case (W)',
+        prioritySi: 'Worst Case (W) අවධානය',
+        titleEn: `${targetWorstCount} Worst Case (W) Accounts Need Cross-Product Follow-Up`,
+        titleSi: `Worst Case (W) ගිණුම් ${targetWorstCount} ක් සඳහා විශේෂ පසු විපරම් අවශ්‍යයි`,
+        detailEn: `Even when DPD looks low, Worst Case (W) accounts remain NPL due to another linked overdue facility (PB/PBM/TW/MB/FB).`,
+        detailSi: `DPD අඩු වුවද, ගනුදෙනුකරුගේ වෙනත් ණය පහසුකමක් හිඟ වීම නිසා මෙම W ගිණුම් ${targetWorstCount} තවමත් NPL ලෙස පවතී.`,
+        actionEn: 'Check the customer’s linked worst-case product and coordinate settlement across both facilities to clear the W flag.',
+        actionSi: 'ගනුදෙනුකරුගේ අනෙක් හිඟ ණය ගිණුම (Worst Case Product) පරීක්ෂා කර, එයද නිරවුල් කිරීමෙන් මෙම ගිණුම NPL වලින් ඉවත් කර ගන්න.',
+        focusContracts: worstTop.map((c) => ({
+          contractNo: c.contractNo,
+          label: `W·${c.worstCaseProduct || 'W'} · ${formatCompactRs(c.npl)}`,
+        })),
       });
     }
 
     return {
-      targetName,
+      targetNameEn,
+      targetNameSi,
       targetDelta,
       branchNetDelta,
       targetOpNpl,
       targetCloseNpl,
+      targetBorderlineCount,
+      targetBorderlineExposure,
+      targetZeroEffort,
+      targetWorstCount,
+      totalDue,
+      totalColl,
+      collRatePct,
       suggestions,
     };
-  }, [officerCards, selectedOfficer]);
+  }, [officerCards, selectedOfficer, safeAers, evaluableItems]);
 
   const campaignSeries = useMemo(() => {
     const months = asArray<{ monthKey: string; label: string }>(CAMPAIGN_MONTHS);
@@ -967,63 +1083,259 @@ export function ExecutiveOfficerHubPanel({
         </div>
       )}
 
-      {/* TAB 4: Daily AI Intelligence Variance (+/-) & Suggestions */}
+      {/* TAB 4: Daily Intelligence Variance Engine — Practical Bilingual (EN + සිංහල) */}
       {activeHighlightTab === 'ai_variance' && (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-2xl bg-gradient-to-r from-slate-900 to-emerald-950 text-white">
-            <div className="flex items-center gap-3">
-              <Bot className="w-6 h-6 text-emerald-400 shrink-0" />
+          {/* Top Header + Language Switcher */}
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 p-4 sm:p-5 rounded-2xl bg-slate-900 dark:bg-slate-950 text-white border border-slate-800">
+            <div className="flex items-start gap-3">
+              <Bot className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
               <div>
-                <div className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-                  Daily Intelligence Variance Engine ·{' '}
-                  {aersMeta?.printedDateTime || 'Latest Snapshot'}
+                <div className="text-xs font-semibold text-emerald-400">
+                  Daily Practical Action &amp; Variance Guide · දෛනික ප්‍රායෝගික විශ්ලේෂණය
                 </div>
-                <div className="text-sm font-bold mt-0.5">
-                  Target Scope: {aiVarianceInsights.targetName}
+                <div className="text-sm sm:text-base font-bold mt-0.5">
+                  {varianceLang === 'si'
+                    ? `තෝරාගත් කොටස: ${aiVarianceInsights.targetNameSi}`
+                    : varianceLang === 'en'
+                      ? `Scope: ${aiVarianceInsights.targetNameEn}`
+                      : `${aiVarianceInsights.targetNameEn} · ${aiVarianceInsights.targetNameSi}`}
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5 font-mono">
+                  Snapshot: {aersMeta?.printedDateTime || 'Latest AERS'}
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-3 font-mono tabular-nums">
-              <div className="px-3 py-1.5 rounded-xl bg-white/10 text-xs">
-                <span className="text-slate-300">Daily Variance: </span>
-                <span
-                  className={`font-bold ${
-                    aiVarianceInsights.targetDelta >= 0
-                      ? 'text-emerald-300'
-                      : 'text-rose-300'
-                  }`}
-                >
-                  {aiVarianceInsights.targetDelta >= 0 ? '+PLUS ' : '-MINUS '}
-                  {formatCompactRs(Math.abs(aiVarianceInsights.targetDelta))}
-                </span>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <div
+                role="group"
+                aria-label="Language selection"
+                className="inline-flex items-center gap-1 p-1 rounded-lg bg-slate-800 border border-slate-700"
+              >
+                {(
+                  [
+                    { id: 'both', label: 'EN + සිංහල' },
+                    { id: 'si', label: 'සිංහල' },
+                    { id: 'en', label: 'English' },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setVarianceLang(opt.id)}
+                    className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                      varianceLang === opt.id
+                        ? 'bg-emerald-500 text-slate-950'
+                        : 'text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* 4 Simple, Easy-to-Understand Numbers */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 tabular-nums">
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                {varianceLang === 'si'
+                  ? 'NPL වෙනස (මුල් → දැනට)'
+                  : varianceLang === 'en'
+                    ? 'Net NPL Change (Open → Now)'
+                    : 'Net NPL Change · NPL වෙනස'}
+              </div>
+              <div
+                className={`mt-1 text-base sm:text-lg font-mono font-bold ${
+                  aiVarianceInsights.targetDelta >= 0
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-red-600 dark:text-red-400'
+                }`}
+              >
+                {aiVarianceInsights.targetDelta >= 0 ? 'Saved ' : 'Increased '}
+                {formatCompactRs(Math.abs(aiVarianceInsights.targetDelta))}
+              </div>
+              <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 mt-0.5">
+                {formatCompactRs(aiVarianceInsights.targetOpNpl)} →{' '}
+                {formatCompactRs(aiVarianceInsights.targetCloseNpl)}
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                {varianceLang === 'si'
+                  ? 'Borderline ගිණුම් (61–90 DPD)'
+                  : varianceLang === 'en'
+                    ? 'Borderline Risk (61–90 DPD)'
+                    : 'Borderline (61–90) · අවදානම් ගිණුම්'}
+              </div>
+              <div className="mt-1 text-base sm:text-lg font-mono font-bold text-amber-700 dark:text-amber-400">
+                {aiVarianceInsights.targetBorderlineCount} Accts
+              </div>
+              <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 mt-0.5">
+                Exposure: {formatCompactRs(aiVarianceInsights.targetBorderlineExposure)}
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                {varianceLang === 'si'
+                  ? 'කෝල්/විසිට් 0 ගිණුම්'
+                  : varianceLang === 'en'
+                    ? 'Uncontacted (0 Efforts)'
+                    : '0-Effort Urgent · කෝල්/විසිට් 0'}
+              </div>
+              <div
+                className={`mt-1 text-base sm:text-lg font-mono font-bold ${
+                  aiVarianceInsights.targetZeroEffort > 0
+                    ? 'text-red-600 dark:text-red-400'
+                    : 'text-emerald-600 dark:text-emerald-400'
+                }`}
+              >
+                {aiVarianceInsights.targetZeroEffort} Accts
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                {varianceLang === 'si'
+                  ? `Worst Case (W): ${aiVarianceInsights.targetWorstCount}`
+                  : `Worst Case (W): ${aiVarianceInsights.targetWorstCount} accts`}
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                {varianceLang === 'si'
+                  ? 'මාසික එකතු කිරීම (Due vs Coll.)'
+                  : varianceLang === 'en'
+                    ? 'Due-Date Collection Progress'
+                    : 'Collection · මාසික එකතුව'}
+              </div>
+              <div className="mt-1 text-base sm:text-lg font-mono font-bold text-slate-900 dark:text-slate-100">
+                {aiVarianceInsights.collRatePct}%{' '}
+                <span className="text-xs font-normal text-emerald-600 dark:text-emerald-400">
+                  ({formatCompactRs(aiVarianceInsights.totalColl)})
+                </span>
+              </div>
+              <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 mt-0.5">
+                Due: {formatCompactRs(aiVarianceInsights.totalDue)}
+              </div>
+            </div>
+          </div>
+
+          {/* Practical Bilingual Action Cards */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {aiVarianceInsights.suggestions.map((sug, idx) => (
               <div
                 key={idx}
-                className={`p-4 rounded-2xl border space-y-2 ${
+                className={`p-4 rounded-xl border flex flex-col justify-between gap-3 ${
                   sug.tone === 'positive'
-                    ? 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800'
+                    ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800'
                     : sug.tone === 'warning'
-                      ? 'bg-amber-50/80 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800'
-                      : 'bg-rose-50/80 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800'
+                      ? 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800'
+                      : 'bg-rose-50/70 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800'
                 }`}
               >
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-900 dark:text-slate-100">
-                  {sug.tone === 'positive' ? (
-                    <TrendingUp className="w-4 h-4 text-emerald-600 shrink-0" />
-                  ) : (
-                    <TrendingDown className="w-4 h-4 text-rose-600 shrink-0" />
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-semibold">
+                    <span
+                      className={`inline-flex items-center gap-1.5 ${
+                        sug.tone === 'positive'
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : sug.tone === 'warning'
+                            ? 'text-amber-800 dark:text-amber-300'
+                            : 'text-rose-700 dark:text-rose-400'
+                      }`}
+                    >
+                      {sug.tone === 'positive' ? (
+                        <TrendingUp className="w-3.5 h-3.5 shrink-0" />
+                      ) : (
+                        <TrendingDown className="w-3.5 h-3.5 shrink-0" />
+                      )}
+                      {varianceLang === 'si'
+                        ? sug.prioritySi
+                        : varianceLang === 'en'
+                          ? sug.priorityEn
+                          : `${sug.priorityEn} · ${sug.prioritySi}`}
+                    </span>
+                    <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">
+                      0{idx + 1}
+                    </span>
+                  </div>
+
+                  {(varianceLang === 'en' || varianceLang === 'both') && (
+                    <div className="space-y-1">
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 leading-snug">
+                        {sug.titleEn}
+                      </h4>
+                      <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+                        {sug.detailEn}
+                      </p>
+                    </div>
                   )}
-                  <span>{sug.title}</span>
+
+                  {(varianceLang === 'si' || varianceLang === 'both') && (
+                    <div
+                      className={`space-y-1 ${
+                        varianceLang === 'both'
+                          ? 'pt-2 border-t border-slate-200/70 dark:border-slate-800/70'
+                          : ''
+                      }`}
+                    >
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 leading-snug">
+                        {sug.titleSi}
+                      </h4>
+                      <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+                        {sug.detailSi}
+                      </p>
+                    </div>
+                  )}
                 </div>
-                <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
-                  {sug.detail}
-                </p>
+
+                <div className="space-y-2.5 pt-2.5 border-t border-slate-200/80 dark:border-slate-800">
+                  <div className="text-[11px] space-y-1">
+                    <div className="font-semibold text-slate-900 dark:text-slate-100">
+                      {varianceLang === 'si'
+                        ? 'අද කළ යුතු පියවර:'
+                        : varianceLang === 'en'
+                          ? 'Practical Action Today:'
+                          : 'Action Today · අද කළ යුතු දේ:'}
+                    </div>
+                    {(varianceLang === 'en' || varianceLang === 'both') && (
+                      <p className="text-slate-700 dark:text-slate-300 leading-relaxed">
+                        {sug.actionEn}
+                      </p>
+                    )}
+                    {(varianceLang === 'si' || varianceLang === 'both') && (
+                      <p className="text-slate-700 dark:text-slate-300 leading-relaxed">
+                        {sug.actionSi}
+                      </p>
+                    )}
+                  </div>
+
+                  {sug.focusContracts.length > 0 && (
+                    <div className="pt-1.5 space-y-1">
+                      <div className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+                        {varianceLang === 'si'
+                          ? 'ප්‍රමුඛතා ගිණුම් (Top Focus):'
+                          : 'Priority Contracts to Contact First:'}
+                      </div>
+                      <div className="space-y-1 font-mono text-[11px] tabular-nums">
+                        {sug.focusContracts.map((fc) => (
+                          <div
+                            key={fc.contractNo}
+                            className="flex items-center justify-between gap-2 text-slate-800 dark:text-slate-200"
+                          >
+                            <span className="font-semibold">{fc.contractNo}</span>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                              {fc.label}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             ))}
           </div>
