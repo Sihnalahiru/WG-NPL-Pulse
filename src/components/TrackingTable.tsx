@@ -510,6 +510,10 @@ export function TrackingTable({
                             href={c.locationUrl}
                             target="_blank"
                             rel="noopener noreferrer"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              window.open(c.locationUrl, '_blank', 'noopener,noreferrer');
+                            }}
                             title={
                               c.locationText
                                 ? `${c.locationText} (${c.locationUpdatedAt || ''})`

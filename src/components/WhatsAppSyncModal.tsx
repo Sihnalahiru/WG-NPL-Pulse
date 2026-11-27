@@ -145,6 +145,10 @@ export function WhatsAppSyncModal({
                             href={m.locationUrl}
                             target="_blank"
                             rel="noopener noreferrer"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              window.open(m.locationUrl, '_blank', 'noopener,noreferrer');
+                            }}
                             className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline"
                           >
                             <MapPin className="w-3.5 h-3.5" />

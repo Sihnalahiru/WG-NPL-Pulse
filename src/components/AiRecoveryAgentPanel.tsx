@@ -401,6 +401,10 @@ export function AiRecoveryAgentPanel({
                             href={place.uri}
                             target="_blank"
                             rel="noopener noreferrer"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              window.open(place.uri, '_blank', 'noopener,noreferrer');
+                            }}
                             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition-colors"
                           >
                             <MapPin className="w-3 h-3 shrink-0" />

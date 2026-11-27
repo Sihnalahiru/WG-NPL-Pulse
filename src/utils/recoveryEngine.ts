@@ -462,6 +462,7 @@ export interface ParsedAersResult {
   watchlistImports?: Sheet2WatchlistRow[];
   isMultiSheetWorkbook?: boolean;
   excludedRegularContractNos?: string[];
+  excelOfficerOpeningBaseline?: OpeningOfficerBaseline;
 }
 
 const STANDARD_AERS_HEADERS = [

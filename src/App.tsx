@@ -184,7 +184,7 @@ export default function App() {
     'office_breakdown' | 'bm_analytics' | 'ai' | 'alerts'
   >('office_breakdown');
   const [settingsSubTab, setSettingsSubTab] = useState<'lookup' | 'backup'>('lookup');
-  const [mrpMap, setMrpMap] = useState>(() => {
+  const [mrpMap, setMrpMap] = useState<Map<string, MrpEnrichment>>(() => {
     const rawObj = readObjectStorage<Record<string, MrpEnrichment>>(
       STORAGE_KEYS.MRP_MAP,
       {},

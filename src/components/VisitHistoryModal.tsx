@@ -113,6 +113,10 @@ export function VisitHistoryModal({
                       href={entry.locationUrl}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        window.open(entry.locationUrl, '_blank', 'noopener,noreferrer');
+                      }}
                       className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 hover:underline"
                     >
                       <MapPin className="w-3 h-3" />
