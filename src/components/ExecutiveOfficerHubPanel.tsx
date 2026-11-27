@@ -27,8 +27,6 @@ import {
   computeOfficerOpeningClosing,
   formatCompactRs,
   getOfficerByOfficeType,
-  isBorderlineNplAccount,
-  isCurrentNplAccount,
   isMarketingOfficeType,
   normalizeContractNo,
   normalizeEvaluableFromAers,
@@ -91,7 +89,6 @@ export function ExecutiveOfficerHubPanel({
     [evaluableItems, openingBaseline],
   );
 
-  // Build rich creative cards per RO / MO
   const officerCards = useMemo(() => {
     const officeMap = new Map<string, string>();
     for (const item of evaluableItems) {
@@ -131,7 +128,6 @@ export function ExecutiveOfficerHubPanel({
     });
   }, [evaluableItems, officerRows]);
 
-  // Bulk-wise contract monitor list
   const bulkTokens = useMemo(() => {
     return Array.from(
       new Set(
@@ -158,7 +154,8 @@ export function ExecutiveOfficerHubPanel({
           (c) => normalizeContractNo(c.contractNo) === tok,
         );
         const mrp = mrpMap?.get(tok) ?? tracked?.mrp;
-        const efforts = aers?.assignOfficerEfforts ?? tracked?.assignOfficerEfforts ?? 0;
+        const efforts =
+          aers?.assignOfficerEfforts ?? tracked?.assignOfficerEfforts ?? 0;
         const totalEff = aers?.totalEfforts ?? tracked?.totalEfforts ?? 0;
         const officer = aers
           ? getOfficerByOfficeType(aers)
@@ -184,7 +181,8 @@ export function ExecutiveOfficerHubPanel({
           efforts,
           totalEff,
           progressPct,
-          hasCallOrVisit: efforts > 0 || (tracked?.visitHistory?.length ?? 0) > 0,
+          hasCallOrVisit:
+            efforts > 0 || (tracked?.visitHistory?.length ?? 0) > 0,
           isTracked: Boolean(tracked),
           aersRecord: aers,
           notPaidSummary: mrp?.notPaidSummary || '',
@@ -192,7 +190,6 @@ export function ExecutiveOfficerHubPanel({
       });
     }
 
-    // Default: show selected officer's high-risk contracts for instant monitoring
     const pool =
       selectedOfficer === 'ALL'
         ? safeAers.slice(0, 20)
@@ -220,7 +217,8 @@ export function ExecutiveOfficerHubPanel({
         efforts,
         totalEff: aers.totalEfforts || 0,
         progressPct,
-        hasCallOrVisit: efforts > 0 || (tracked?.visitHistory?.length ?? 0) > 0,
+        hasCallOrVisit:
+          efforts > 0 || (tracked?.visitHistory?.length ?? 0) > 0,
         isTracked: Boolean(tracked),
         aersRecord: aers,
         notPaidSummary: mrp?.notPaidSummary || '',
@@ -228,7 +226,6 @@ export function ExecutiveOfficerHubPanel({
     });
   }, [bulkTokens, safeAers, safeTracked, mrpMap, selectedOfficer]);
 
-  // Daily AI Intelligence Variance & Suggestions (Individual vs Branch)
   const aiVarianceInsights = useMemo(() => {
     const activeCard =
       selectedOfficer !== 'ALL'
@@ -237,9 +234,11 @@ export function ExecutiveOfficerHubPanel({
 
     const totalOpNpl = officerCards.reduce((s, c) => s + c.openingNpl, 0);
     const totalCloseNpl = officerCards.reduce((s, c) => s + c.closingNpl, 0);
-    const branchNetDelta = totalOpNpl - totalCloseNpl; // Positive = NPL Reduced (Good), Negative = NPL Increased
+    const branchNetDelta = totalOpNpl - totalCloseNpl;
 
-    const targetName = activeCard ? `${activeCard.officer} (${activeCard.officeType})` : 'Entire Branch';
+    const targetName = activeCard
+      ? `${activeCard.officer} (${activeCard.officeType})`
+      : 'Entire Branch';
     const targetOpNpl = activeCard ? activeCard.openingNpl : totalOpNpl;
     const targetCloseNpl = activeCard ? activeCard.closingNpl : totalCloseNpl;
     const targetDelta = targetOpNpl - targetCloseNpl;
@@ -299,7 +298,6 @@ export function ExecutiveOfficerHubPanel({
     };
   }, [officerCards, selectedOfficer]);
 
-  // Campaign Nov 2026 - Mar 2027 monthly series
   const campaignSeries = useMemo(() => {
     return CAMPAIGN_MONTHS.map((m) => {
       const snaps = safeSnapshots.filter((s) => s.monthKey === m.monthKey);
@@ -309,7 +307,9 @@ export function ExecutiveOfficerHubPanel({
         hasData: Boolean(latest),
         nplAmount: latest ? latest.branchNpl || latest.trackedNpl : 0,
         savedAmount: latest ? latest.nplSavedAmount : 0,
-        collectionPct: latest ? latest.branchCollectionPct || latest.collectionPct : 0,
+        collectionPct: latest
+          ? latest.branchCollectionPct || latest.collectionPct
+          : 0,
         snapshotDate: latest?.snapshotDate || 'Pending',
       };
     });
@@ -339,10 +339,13 @@ export function ExecutiveOfficerHubPanel({
             onChange={(e) => onSelectOfficer(e.target.value)}
             className="px-3.5 py-2 text-xs font-semibold rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/40 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-600"
           >
-            <option value="ALL">All Officers — Branch Portfolio ({officerCards.length})</option>
+            <option value="ALL">
+              All Officers — Branch Portfolio ({officerCards.length})
+            </option>
             {officerCards.map((c) => (
               <option key={c.officer} value={c.officer}>
-                {c.officer} ({c.officeType}) · {c.closingCount} Accts · NPL {formatCompactRs(c.closingNpl)}
+                {c.officer} ({c.officeType}) · {c.closingCount} Accts · NPL{' '}
+                {formatCompactRs(c.closingNpl)}
               </option>
             ))}
           </select>
@@ -414,7 +417,7 @@ export function ExecutiveOfficerHubPanel({
         </div>
       </div>
 
-      {/* TAB 1: Creative RO / MO Profile Cards */}
+      {/* TAB 1: Creative RO / MO Profile Cards with Real UserAvatar */}
       {activeHighlightTab === 'cards' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between text-xs">
@@ -448,7 +451,6 @@ export function ExecutiveOfficerHubPanel({
                         : 'bg-slate-50/70 dark:bg-slate-950/70 border-slate-200 dark:border-slate-800 hover:border-emerald-400 dark:hover:border-emerald-700 hover:shadow-sm'
                     }`}
                   >
-                    {/* Card Header: Officer Pic + Name + Role */}
                     <div className="flex items-center justify-between gap-2.5">
                       <div className="flex items-center gap-2.5 min-w-0">
                         <UserAvatar
@@ -488,7 +490,6 @@ export function ExecutiveOfficerHubPanel({
                       </span>
                     </div>
 
-                    {/* Core Metrics Grid matching Sketch */}
                     <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200/80 dark:border-slate-800/80 text-xs tabular-nums">
                       <div>
                         <span className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
@@ -512,7 +513,8 @@ export function ExecutiveOfficerHubPanel({
                             Next Month Borderline
                           </span>
                           <span className="font-mono font-bold text-amber-900 dark:text-amber-200">
-                            {card.borderlineCount} Cases · {formatCompactRs(card.borderlineAmount)}
+                            {card.borderlineCount} Cases ·{' '}
+                            {formatCompactRs(card.borderlineAmount)}
                           </span>
                         </div>
                         <div className="text-right">
@@ -593,7 +595,10 @@ export function ExecutiveOfficerHubPanel({
                       </td>
                       <td className="py-2.5 px-3">
                         <div className="flex items-center gap-2">
-                          <UserAvatar name={item.officer} sizeClass="w-6 h-6 text-[9px]" />
+                          <UserAvatar
+                            name={item.officer}
+                            sizeClass="w-6 h-6 text-[9px]"
+                          />
                           <div>
                             <div className="font-medium text-slate-900 dark:text-slate-100">
                               {item.officer}
@@ -731,7 +736,6 @@ export function ExecutiveOfficerHubPanel({
             </div>
           </div>
 
-          {/* 5-Month Campaign Strip */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 tabular-nums">
             {campaignSeries.map((m) => (
               <div
@@ -752,7 +756,9 @@ export function ExecutiveOfficerHubPanel({
                   {m.hasData ? formatCompactRs(m.nplAmount) : '—'}
                 </div>
                 <div className="mt-0.5 text-[11px] text-emerald-700 dark:text-emerald-400 font-mono">
-                  {m.hasData ? `Saved: ${formatCompactRs(m.savedAmount)}` : 'Awaiting AERS'}
+                  {m.hasData
+                    ? `Saved: ${formatCompactRs(m.savedAmount)}`
+                    : 'Awaiting AERS'}
                 </div>
               </div>
             ))}
@@ -772,7 +778,9 @@ export function ExecutiveOfficerHubPanel({
                 </div>
               </div>
               <div>
-                <span className="text-[11px] text-slate-500">Branch Closing NPL</span>
+                <span className="text-[11px] text-slate-500">
+                  Branch Closing NPL
+                </span>
                 <div className="mt-1 text-base font-mono font-bold text-rose-600 dark:text-rose-400">
                   {formatCompactRs(
                     officerCards.reduce((s, c) => s + c.closingNpl, 0),
@@ -780,7 +788,9 @@ export function ExecutiveOfficerHubPanel({
                 </div>
               </div>
               <div>
-                <span className="text-[11px] text-slate-500">Branch Borderline Exposure</span>
+                <span className="text-[11px] text-slate-500">
+                  Branch Borderline Exposure
+                </span>
                 <div className="mt-1 text-base font-mono font-bold text-amber-600 dark:text-amber-400">
                   {formatCompactRs(
                     officerCards.reduce((s, c) => s + c.borderlineAmount, 0),
@@ -788,7 +798,9 @@ export function ExecutiveOfficerHubPanel({
                 </div>
               </div>
               <div>
-                <span className="text-[11px] text-slate-500">Branch Net Variance</span>
+                <span className="text-[11px] text-slate-500">
+                  Branch Net Variance
+                </span>
                 <div className="mt-1 text-base font-mono font-bold text-emerald-600 dark:text-emerald-400">
                   {formatCompactRs(
                     officerCards.reduce(
@@ -808,7 +820,9 @@ export function ExecutiveOfficerHubPanel({
                     <th className="py-2.5 px-3 text-right">Opening NPL</th>
                     <th className="py-2.5 px-3 text-right">Closing NPL</th>
                     <th className="py-2.5 px-3 text-right">Borderline</th>
-                    <th className="py-2.5 px-3 text-right">Net Variance (+/-)</th>
+                    <th className="py-2.5 px-3 text-right">
+                      Net Variance (+/-)
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800 tabular-nums">
@@ -826,7 +840,8 @@ export function ExecutiveOfficerHubPanel({
                           {formatCompactRs(c.closingNpl)}
                         </td>
                         <td className="py-2 px-3 text-right font-mono text-amber-600">
-                          {c.borderlineCount} · {formatCompactRs(c.borderlineAmount)}
+                          {c.borderlineCount} ·{' '}
+                          {formatCompactRs(c.borderlineAmount)}
                         </td>
                         <td
                           className={`py-2 px-3 text-right font-mono font-bold ${
@@ -854,7 +869,8 @@ export function ExecutiveOfficerHubPanel({
               <Bot className="w-6 h-6 text-emerald-400 shrink-0" />
               <div>
                 <div className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-                  Daily Intelligence Variance Engine · {aersMeta?.printedDateTime || 'Latest Snapshot'}
+                  Daily Intelligence Variance Engine ·{' '}
+                  {aersMeta?.printedDateTime || 'Latest Snapshot'}
                 </div>
                 <div className="text-sm font-bold mt-0.5">
                   Target Scope: {aiVarianceInsights.targetName}
