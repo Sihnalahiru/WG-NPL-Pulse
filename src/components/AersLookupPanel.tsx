@@ -14,6 +14,7 @@ import {
   normalizeContractNo,
 } from '../utils/recoveryEngine';
 import { PaymentPatternStrip } from './PaymentPatternStrip';
+import { UserAvatar } from './UserAvatar';
 
 interface AersLookupPanelProps {
   aersRecords: AersRecord[];
@@ -176,7 +177,10 @@ export function AersLookupPanel({
                         {r.cusName}
                       </td>
                       <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
-                        {r.recoveryOfficer || '—'}
+                        <div className="flex items-center gap-2">
+                          <UserAvatar name={r.recoveryOfficer || ''} sizeClass="w-6 h-6 text-[10px]" />
+                          <span>{r.recoveryOfficer || '—'}</span>
+                        </div>
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-900 dark:text-slate-100">
                         {r.actualDpd} / {r.monthEndForecastDpd}
