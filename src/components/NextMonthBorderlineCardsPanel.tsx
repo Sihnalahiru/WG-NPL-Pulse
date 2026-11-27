@@ -28,6 +28,7 @@ import {
   normalizeEvaluableFromTracked,
 } from '../utils/recoveryEngine';
 import { PaymentPatternStrip } from './PaymentPatternStrip';
+import { UserAvatar } from './UserAvatar';
 
 interface NextMonthBorderlineCardsPanelProps {
   trackedContracts: TrackedContract[];
@@ -553,13 +554,16 @@ export function NextMonthBorderlineCardsPanel({
                         : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-amber-300 dark:hover:border-amber-700'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
-                          {person.officer}
-                        </div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                          {person.officeTypes.join(', ')}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <UserAvatar name={person.officer} sizeClass="w-8 h-8 text-[11px]" />
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                            {person.officer}
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                            {person.officeTypes.join(', ')}
+                          </div>
                         </div>
                       </div>
                       <span className="px-2 py-0.5 text-[11px] font-mono font-bold rounded-md bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300 shrink-0">
@@ -611,7 +615,8 @@ export function NextMonthBorderlineCardsPanel({
       {/* Selected Officer Spotlight Banner */}
       {activeOfficerSummary && (
         <div className="px-4 sm:px-5 py-3 bg-amber-50/70 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-900/60 flex flex-wrap items-center justify-between gap-3 text-xs tabular-nums">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
+            <UserAvatar name={activeOfficerSummary.officer} sizeClass="w-7 h-7 text-[10px]" />
             <UserCheck className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" />
             <span className="font-semibold text-slate-900 dark:text-slate-100">
               Officer View: {activeOfficerSummary.officer}
@@ -673,10 +678,10 @@ export function NextMonthBorderlineCardsPanel({
                         : 'bg-white dark:bg-slate-950/60 border-slate-200 dark:border-slate-800'
                     }`}
                   >
-                    {/* Card Top: Contract No + Risk Badges */}
+                    {/* Card Top: Contract No + Risk Badges + Officer Avatar */}
                     <div className="space-y-2">
                       <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-1.5">
                             <span className="font-mono text-sm font-bold text-slate-900 dark:text-slate-100">
                               {item.contractNo}
@@ -693,16 +698,22 @@ export function NextMonthBorderlineCardsPanel({
                           </h3>
                         </div>
 
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded border whitespace-nowrap shrink-0 ${
-                            isMonthEnd
-                              ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800'
-                              : 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800'
-                          }`}
-                        >
-                          <AlertTriangle className="w-3 h-3 shrink-0" />
-                          {isMonthEnd ? 'Month-End 91+' : 'Next-Mo 61-90'}
-                        </span>
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded border whitespace-nowrap ${
+                              isMonthEnd
+                                ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800'
+                                : 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800'
+                            }`}
+                          >
+                            <AlertTriangle className="w-3 h-3 shrink-0" />
+                            {isMonthEnd ? 'Month-End 91+' : 'Next-Mo 61-90'}
+                          </span>
+                          <UserAvatar
+                            name={item.officer}
+                            sizeClass="w-11 h-11 text-xs shadow-xs"
+                          />
+                        </div>
                       </div>
 
                       {/* Vehicle, Office Type & RO Meta */}
