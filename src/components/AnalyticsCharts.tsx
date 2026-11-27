@@ -2,10 +2,10 @@ import { useState } from 'react';
 import {
   Area,
   Bar,
-  BarChart,
   CartesianGrid,
   Cell,
   ComposedChart,
+  BarChart,
   Legend,
   Line,
   ResponsiveContainer,
@@ -18,7 +18,6 @@ import {
   CheckCircle2,
   Edit3,
   Flag,
-  Gauge,
   Layers,
   PieChart,
   Plus,
@@ -30,7 +29,6 @@ import type {
   AersRecord,
   MonthlySnapshot,
   TrackedContract,
-  VisitWithOption,
 } from '../types/recovery';
 import {
   formatCompactRs,
@@ -55,13 +53,6 @@ interface AnalyticsChartsProps {
   onUpdateSnapshot: (snapshot: MonthlySnapshot) => void;
   onDeleteSnapshot: (id: string) => void;
 }
-
-const VISIT_OPTIONS: VisitWithOption[] = [
-  'My Self',
-  'Mr. Damith',
-  'BM',
-  'Marketing',
-];
 
 // Helper functions for SVG polar coordinate mathematics
 function polarToCartesian(cx: number, cy: number, radius: number, angleInDegrees: number) {
@@ -116,12 +107,12 @@ export function AnalyticsCharts({
   const effectiveSavedScope: 'aers' | 'tracked' =
     savedScope === 'aers' && aersRecords.length > 0 ? 'aers' : 'tracked';
 
-  // State for Series Filter and Chart Type in Multi-KPI chart (Opening & Closing)
-  const [seriesFilter, setSeriesFilter] = useState<'all' | 'debtor' | 'npl' | 'saved'>('all');
-  const [trendChartType, setTrendChartType] = useState<'paired' | 'area'>('paired');
+  // Chart Type toggles for split Debtor & NPL cards
+  const [debtorChartType, setDebtorChartType] = useState<'paired' | 'area'>('paired');
+  const [nplChartType, setNplChartType] = useState<'paired' | 'area'>('paired');
 
   // State for Target Gauge
-  const [targetAmount, setTargetAmount] = useState<number>(15_000_000); // Default branch recovery target Rs. 15.0M
+  const [targetAmount, setTargetAmount] = useState<number>(15_000_000);
 
   // State for Borderline vs. Classified NPL Risk (Doughnut Gauge vs Bar Chart)
   const [riskViewType, setRiskViewType] = useState<'doughnut' | 'bar'>('doughnut');
@@ -215,7 +206,7 @@ export function AnalyticsCharts({
       ? liveAersFallenAmt
       : liveWatchlistFallenAmt;
 
-  // Multiple KPI Series Trend Data with BOTH Opening and Closing values
+  // Trend Data with BOTH Opening and Closing values
   const trendChartData =
     snapshots.length > 0
       ? snapshots.map((s, idx) => {
@@ -224,14 +215,22 @@ export function AnalyticsCharts({
             effectiveSavedScope === 'aers'
               ? aersRecords.length > 0
               : contracts.length > 0;
+          const opDebtor = isLast && hasLive && liveOpDebtorAmt > 0 ? liveOpDebtorAmt : s.trackedDebtor * 1.03;
+          const closingDebtor = isLast && hasLive ? liveClosingDebtorAmt : s.trackedDebtor;
+          const opNpl = isLast && hasLive && liveOpNplAmt > 0 ? liveOpNplAmt : s.trackedNpl * 1.15;
+          const closingNpl = isLast && hasLive ? liveClosingNplAmt : s.trackedNpl;
+          const savedAmt = isLast && hasLive ? activeSavedAmt : s.nplSavedAmount;
+          const fallenAmt = isLast && hasLive ? activeFallenAmt : s.newNplAmount;
           return {
             ...s,
-            opDebtor: s.trackedDebtor * 1.03,
-            closingDebtor: isLast && hasLive ? liveClosingDebtorAmt : s.trackedDebtor,
-            opNpl: s.trackedNpl * 1.15,
-            closingNpl: isLast && hasLive ? liveClosingNplAmt : s.trackedNpl,
-            savedAmt: isLast && hasLive ? activeSavedAmt : s.nplSavedAmount,
-            fallenAmt: isLast && hasLive ? activeFallenAmt : s.newNplAmount,
+            opDebtor,
+            closingDebtor,
+            debtorDiff: closingDebtor - opDebtor,
+            opNpl,
+            closingNpl,
+            nplDiff: closingNpl - opNpl,
+            savedAmt,
+            fallenAmt,
             collectionPct: s.collectionPct,
           };
         })
@@ -241,8 +240,10 @@ export function AnalyticsCharts({
               label: 'Opening 1st',
               opDebtor: liveOpDebtorAmt || liveClosingDebtorAmt * 1.04,
               closingDebtor: liveOpDebtorAmt || liveClosingDebtorAmt * 1.04,
+              debtorDiff: 0,
               opNpl: liveOpNplAmt || (liveClosingNplAmt ? liveClosingNplAmt * 1.2 : 7_500_000),
               closingNpl: liveOpNplAmt || (liveClosingNplAmt ? liveClosingNplAmt * 1.2 : 7_500_000),
+              nplDiff: 0,
               savedAmt: Math.max(800_000, activeSavedAmt * 0.25),
               fallenAmt: Math.max(1_200_000, activeFallenAmt * 0.4),
               collectionPct: 62,
@@ -251,8 +252,10 @@ export function AnalyticsCharts({
               label: 'Mid-Month 15th',
               opDebtor: liveOpDebtorAmt || liveClosingDebtorAmt * 1.04,
               closingDebtor: liveClosingDebtorAmt * 1.02,
+              debtorDiff: liveClosingDebtorAmt * 1.02 - (liveOpDebtorAmt || liveClosingDebtorAmt * 1.04),
               opNpl: liveOpNplAmt || (liveClosingNplAmt ? liveClosingNplAmt * 1.2 : 7_500_000),
-              closingNpl: (liveOpNplAmt ? liveOpNplAmt * 1.05 : 6_200_000),
+              closingNpl: liveOpNplAmt ? liveOpNplAmt * 1.05 : 6_200_000,
+              nplDiff: (liveOpNplAmt ? liveOpNplAmt * 1.05 : 6_200_000) - (liveOpNplAmt || 7_500_000),
               savedAmt: Math.max(2_200_000, activeSavedAmt * 0.65),
               fallenAmt: Math.max(1_800_000, activeFallenAmt * 0.75),
               collectionPct: 75,
@@ -261,8 +264,10 @@ export function AnalyticsCharts({
               label: 'Live (Today)',
               opDebtor: liveOpDebtorAmt || liveClosingDebtorAmt * 1.04,
               closingDebtor: liveClosingDebtorAmt,
+              debtorDiff: liveClosingDebtorAmt - (liveOpDebtorAmt || liveClosingDebtorAmt * 1.04),
               opNpl: liveOpNplAmt || (liveClosingNplAmt ? liveClosingNplAmt * 1.2 : 7_500_000),
               closingNpl: liveClosingNplAmt,
+              nplDiff: liveClosingNplAmt - (liveOpNplAmt || (liveClosingNplAmt ? liveClosingNplAmt * 1.2 : 7_500_000)),
               savedAmt: activeSavedAmt,
               fallenAmt: activeFallenAmt,
               collectionPct: 82,
@@ -288,42 +293,6 @@ export function AnalyticsCharts({
     }
     return `${val}`;
   };
-
-  // Compute Visit Effectiveness Breakdown across tracked contracts & visit histories
-  const visitStats = VISIT_OPTIONS.map((option) => {
-    const matchingContracts = contracts.filter(
-      (c) =>
-        c.visitWith === option ||
-        c.visitHistory.some((h) => h.visitWith === option),
-    );
-    const totalVisits = contracts.reduce((sum, c) => {
-      const logsCount = c.visitHistory.filter(
-        (h) => h.visitWith === option,
-      ).length;
-      if (logsCount > 0) return sum + logsCount;
-      return c.visitWith === option ? sum + 1 : sum;
-    }, 0);
-
-    const savedOrPositive = matchingContracts.filter(
-      (c) =>
-        isNplSavedAccount(c) ||
-        c.currentSituation === 'Settled' ||
-        (c.lastPaidAmount > 0 && c.actualDpd < 91),
-    ).length;
-
-    const successRate =
-      matchingContracts.length > 0
-        ? Math.round((savedOrPositive / matchingContracts.length) * 100)
-        : 0;
-
-    return {
-      option,
-      contractsCount: matchingContracts.length,
-      totalVisits,
-      savedOrPositive,
-      successRate,
-    };
-  });
 
   const openEditSnapshot = (snap: MonthlySnapshot) => {
     setIsAddingSnapshot(false);
@@ -380,9 +349,6 @@ export function AnalyticsCharts({
   };
 
   const netSavedVsFallen = activeSavedAmt - activeFallenAmt;
-  const saveRatePct = Math.round(
-    (activeSavedCount / Math.max(1, activeSavedCount + activeFallenCount)) * 100,
-  );
 
   // Borderline vs. Classified NPL Calculations
   const aersClassified = aersRecords.filter((r) =>
@@ -437,7 +403,6 @@ export function AnalyticsCharts({
   const totalRiskExposure = activeClassifiedAmt + activeBorderlineAmt;
   const totalRiskCount = activeClassifiedCount + activeBorderlineCount;
 
-  // Metric selection for doughnut distribution (Exposure Rs. vs Account Count)
   const isCountMode = riskMetricMode === 'count';
   const classifiedMetricVal = isCountMode ? activeClassifiedCount : activeClassifiedAmt;
   const borderlineMetricVal = isCountMode ? activeBorderlineCount : activeBorderlineAmt;
@@ -451,28 +416,23 @@ export function AnalyticsCharts({
   const classifiedPct = Math.round(classifiedRatio * 100);
   const borderlinePct = 100 - classifiedPct;
 
-  // 360° Circular Doughnut Geometry with 6° gaps
   const doughnutCx = 140;
   const doughnutCy = 112;
   const doughnutROuter = 78;
   const doughnutRInner = 52;
 
-  const totalDoughnutArc = 348; // 360° minus 2 * 6° gap
+  const totalDoughnutArc = 348;
   const minDoughnutSpan = 18;
   const maxDoughnutSpan = totalDoughnutArc - minDoughnutSpan;
   const rawBorderlineSpan = Math.round(borderlineRatio * totalDoughnutArc);
   const borderlineSpan = Math.max(minDoughnutSpan, Math.min(maxDoughnutSpan, rawBorderlineSpan));
   const classifiedSpan = totalDoughnutArc - borderlineSpan;
 
-  // Borderline segment: starts at top (-87°)
   const borderlineStartAngle = -87;
   const borderlineEndAngle = borderlineStartAngle + borderlineSpan;
-
-  // Classified NPL segment: starts after 6° gap
   const classifiedStartAngle = borderlineEndAngle + 6;
   const classifiedEndAngle = classifiedStartAngle + classifiedSpan;
 
-  // Data preparations for Card 3: 91-DPD Risk Bar Chart
   const sourceRecords = effectiveSavedScope === 'aers' ? aersRecords : contracts;
 
   const tier60_75 = sourceRecords.filter((r) => {
@@ -589,20 +549,18 @@ export function AnalyticsCharts({
     0,
   );
 
-  // Target Gauge Calculations (220° circular arc gauge with Target indicator)
+  // Target Gauge Calculations
   const targetMaxScale = Math.max(targetAmount * 1.35, activeSavedAmt * 1.15, 20_000_000);
   const targetPctOfScale = Math.min(1, targetAmount / targetMaxScale);
   const savedPctOfScale = Math.min(1, activeSavedAmt / targetMaxScale);
   const targetAchievedPct = Math.round((activeSavedAmt / Math.max(1, targetAmount)) * 100);
 
-  // Target Gauge Arc Geometry: spans 220 degrees from 160° to 380°
   const gaugeArcAngleStart = 160;
   const gaugeArcTotal = 220;
   const gaugeTargetAngle = gaugeArcAngleStart + targetPctOfScale * gaugeArcTotal;
   const gaugeTargetPoint = polarToCartesian(140, 130, 88, gaugeTargetAngle);
   const gaugeTargetInner = polarToCartesian(140, 130, 68, gaugeTargetAngle);
 
-  // Custom SVG milestone dot component with continuous pulsing halo for Multiple KPI series
   const CustomizedMilestoneDot = (props: any) => {
     const { cx, cy, index } = props;
     if (!cx || !cy) return null;
@@ -633,136 +591,80 @@ export function AnalyticsCharts({
 
   return (
     <div key={animKey} className="space-y-6">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* CHART 1: Monthly NPL vs. Debtor Trend & Live Radar - Multiple KPI Series */}
+      {/* SECTION 1: Split Debtor Trend & NPL Trend (2 Dedicated Cards with Charts + Tables) */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        {/* CARD 1A: Monthly Debtor Trend (Opening vs. Closing) + Debtor Table */}
         <div
           style={{ animationDelay: '50ms' }}
-          className="animate-fade-slide-up bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 shadow-lg shadow-slate-900/5 flex flex-col justify-between"
+          className="animate-fade-slide-up bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 shadow-lg shadow-slate-900/5 flex flex-col justify-between space-y-4"
         >
           <div>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                  <BarChart3 className="w-4 h-4 text-blue-500" />
-                  Monthly NPL vs. Debtor Trend (Multi-KPI)
+                  <BarChart3 className="w-4 h-4 text-blue-600" />
+                  Monthly Debtor Trend (Opening vs. Closing)
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  {trendChartType === 'paired'
-                    ? 'Paired Opening vs. Closing Bars'
-                    : 'Curved Gradient Trend Area'}{' '}
-                  · Dual-Scaled Debtor (Left) &amp; NPL (Right)
+                  Opening Balance Debtor vs. Closing Debtor Portfolio Progression
                 </p>
               </div>
 
-              <div className="flex items-center gap-1.5">
-                {/* Chart Type Toggle: Paired Bars vs Trend Area */}
-                <div className="inline-flex items-center gap-0.5 p-0.5 bg-slate-100 dark:bg-slate-950 rounded-lg text-[10px]">
-                  <button
-                    type="button"
-                    onClick={() => setTrendChartType('paired')}
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 font-medium rounded whitespace-nowrap transition-colors ${
-                      trendChartType === 'paired'
-                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-900'
-                    }`}
-                  >
-                    <BarChart3 className="w-3 h-3 text-blue-500" />
-                    Paired Bars
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTrendChartType('area')}
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 font-medium rounded whitespace-nowrap transition-colors ${
-                      trendChartType === 'area'
-                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-900'
-                    }`}
-                  >
-                    <Layers className="w-3 h-3 text-indigo-500" />
-                    Area
-                  </button>
-                </div>
-
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-blue-100 text-blue-800 dark:bg-blue-950/80 dark:text-blue-300">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-pulse" />
-                  Dual Y-Axis
-                </span>
-              </div>
-            </div>
-
-            {/* Series Filter Selector */}
-            <div className="mb-3 flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-950 rounded-lg text-[10px]">
-              {(
-                [
-                  { id: 'all', label: 'All (Op & Cls)' },
-                  { id: 'debtor', label: 'Debtor (Op vs Cls)', color: 'text-blue-600' },
-                  { id: 'npl', label: 'NPL (Op vs Cls)', color: 'text-rose-600' },
-                  { id: 'saved', label: 'NPL Saved', color: 'text-emerald-600' },
-                ] as const
-              ).map((btn) => (
+              <div className="inline-flex items-center gap-0.5 p-0.5 bg-slate-100 dark:bg-slate-950 rounded-lg text-[10px]">
                 <button
-                  key={btn.id}
                   type="button"
-                  onClick={() => setSeriesFilter(btn.id)}
-                  className={`px-2 py-0.5 font-medium rounded transition-colors whitespace-nowrap ${
-                    seriesFilter === btn.id
+                  onClick={() => setDebtorChartType('paired')}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 font-medium rounded whitespace-nowrap transition-colors ${
+                    debtorChartType === 'paired'
                       ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
                       : 'text-slate-500 dark:text-slate-400 hover:text-slate-900'
                   }`}
                 >
-                  {btn.label}
+                  <BarChart3 className="w-3 h-3 text-blue-500" />
+                  Bars
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={() => setDebtorChartType('area')}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 font-medium rounded whitespace-nowrap transition-colors ${
+                    debtorChartType === 'area'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-900'
+                  }`}
+                >
+                  <Layers className="w-3 h-3 text-indigo-500" />
+                  Area
+                </button>
+              </div>
             </div>
 
-            <div className="h-56 w-full">
+            <div className="h-52 w-full">
               {trendChartData.length === 0 ? (
                 <div className="h-full flex items-center justify-center text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl px-4">
-                  No portfolio data yet. Upload an AERS Excel file or add tracked contracts.
+                  No debtor data yet. Upload an AERS Excel file or add tracked contracts.
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart
                     data={trendChartData}
-                    margin={{ top: 16, right: 10, left: -10, bottom: 0 }}
+                    margin={{ top: 12, right: 12, left: -10, bottom: 0 }}
                   >
                     <defs>
-                      {/* Bar Fill Gradients */}
-                      <linearGradient id="multiOpDebtorBarGrad" x1="0" y1="0" x2="0" y2="1">
+                      <linearGradient id="splitOpDebtorBarGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#60a5fa" stopOpacity={0.9} />
                         <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.75} />
                       </linearGradient>
-                      <linearGradient id="multiClosingDebtorBarGrad" x1="0" y1="0" x2="0" y2="1">
+                      <linearGradient id="splitClosingDebtorBarGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#2563eb" stopOpacity={0.95} />
                         <stop offset="100%" stopColor="#1d4ed8" stopOpacity={0.85} />
                       </linearGradient>
-
-                      <linearGradient id="multiOpNplBarGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#fb7185" stopOpacity={0.9} />
-                        <stop offset="100%" stopColor="#f43f5e" stopOpacity={0.75} />
-                      </linearGradient>
-                      <linearGradient id="multiClosingNplBarGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#e11d48" stopOpacity={0.95} />
-                        <stop offset="100%" stopColor="#be123c" stopOpacity={0.85} />
-                      </linearGradient>
-
-                      <linearGradient id="multiSavedBarGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#10b981" stopOpacity={0.95} />
-                        <stop offset="100%" stopColor="#047857" stopOpacity={0.8} />
-                      </linearGradient>
-
-                      {/* Area Fill Gradients */}
-                      <linearGradient id="multiOpDebtorAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                      <linearGradient id="splitOpDebtorAreaGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.25} />
                         <stop offset="95%" stopColor="#38bdf8" stopOpacity={0.0} />
                       </linearGradient>
-                      <linearGradient id="multiClosingDebtorAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                      <linearGradient id="splitClosingDebtorAreaGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#2563eb" stopOpacity={0.35} />
                         <stop offset="95%" stopColor="#2563eb" stopOpacity={0.0} />
-                      </linearGradient>
-                      <linearGradient id="multiClosingNplAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.4} />
-                        <stop offset="95%" stopColor="#f43f5e" stopOpacity={0.0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
@@ -772,29 +674,13 @@ export function AnalyticsCharts({
                       axisLine={{ stroke: gridColor }}
                       tickLine={false}
                     />
-
-                    {/* Left Axis: Debtor Scale (Millions Rs.) */}
                     <YAxis
-                      yAxisId="debtor"
-                      orientation="left"
                       tick={{ fill: axisColor, fontSize: 10 }}
                       axisLine={false}
                       tickLine={false}
                       domain={[0, Math.ceil((maxDebtorVal * 1.15) / 5_000_000) * 5_000_000 || 50_000_000]}
                       tickFormatter={(v) => `${(Number(v) / 1_000_000).toFixed(0)}M`}
                     />
-
-                    {/* Right Axis: NPL & Saved Scale (Millions Rs.) */}
-                    <YAxis
-                      yAxisId="npl"
-                      orientation="right"
-                      tick={{ fill: axisColor, fontSize: 10 }}
-                      axisLine={false}
-                      tickLine={false}
-                      domain={[0, Math.ceil((maxNplVal * 1.3) / 1_000_000) * 1_000_000 || 10_000_000]}
-                      tickFormatter={(v) => `${(Number(v) / 1_000_000).toFixed(1)}M`}
-                    />
-
                     <Tooltip
                       contentStyle={{
                         backgroundColor: tooltipBg,
@@ -808,185 +694,385 @@ export function AnalyticsCharts({
                         String(name),
                       ]}
                     />
-                    <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '6px' }} />
+                    <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }} />
 
-                    {/* Paired Bar Chart Mode */}
-                    {trendChartType === 'paired' ? (
+                    {debtorChartType === 'paired' ? (
                       <>
-                        {(seriesFilter === 'all' || seriesFilter === 'debtor') && (
-                          <Bar
-                            yAxisId="debtor"
-                            dataKey="opDebtor"
-                            name="Op Debtor"
-                            fill="url(#multiOpDebtorBarGrad)"
-                            stroke="#3b82f6"
-                            strokeWidth={1}
-                            radius={[4, 4, 0, 0]}
-                            maxBarSize={22}
-                          />
-                        )}
-
-                        {(seriesFilter === 'all' || seriesFilter === 'debtor') && (
-                          <Bar
-                            yAxisId="debtor"
-                            dataKey="closingDebtor"
-                            name="Closing Debtor"
-                            fill="url(#multiClosingDebtorBarGrad)"
-                            stroke="#1d4ed8"
-                            strokeWidth={1}
-                            radius={[4, 4, 0, 0]}
-                            maxBarSize={22}
-                          />
-                        )}
-
-                        {(seriesFilter === 'all' || seriesFilter === 'npl') && (
-                          <Bar
-                            yAxisId="npl"
-                            dataKey="opNpl"
-                            name="Op NPL"
-                            fill="url(#multiOpNplBarGrad)"
-                            stroke="#f43f5e"
-                            strokeWidth={1}
-                            radius={[4, 4, 0, 0]}
-                            maxBarSize={22}
-                          />
-                        )}
-
-                        {(seriesFilter === 'all' || seriesFilter === 'npl') && (
-                          <Bar
-                            yAxisId="npl"
-                            dataKey="closingNpl"
-                            name="Closing NPL"
-                            fill="url(#multiClosingNplBarGrad)"
-                            stroke="#be123c"
-                            strokeWidth={1}
-                            radius={[4, 4, 0, 0]}
-                            maxBarSize={22}
-                          />
-                        )}
-
-                        {(seriesFilter === 'all' || seriesFilter === 'saved') && (
-                          <Bar
-                            yAxisId="npl"
-                            dataKey="savedAmt"
-                            name="NPL Saved"
-                            fill="url(#multiSavedBarGrad)"
-                            stroke="#10b981"
-                            strokeWidth={1}
-                            radius={[4, 4, 0, 0]}
-                            maxBarSize={22}
-                          />
-                        )}
+                        <Bar
+                          dataKey="opDebtor"
+                          name="Opening Debtor"
+                          fill="url(#splitOpDebtorBarGrad)"
+                          stroke="#3b82f6"
+                          strokeWidth={1}
+                          radius={[4, 4, 0, 0]}
+                          maxBarSize={28}
+                        />
+                        <Bar
+                          dataKey="closingDebtor"
+                          name="Closing Debtor"
+                          fill="url(#splitClosingDebtorBarGrad)"
+                          stroke="#1d4ed8"
+                          strokeWidth={1}
+                          radius={[4, 4, 0, 0]}
+                          maxBarSize={28}
+                        />
                       </>
                     ) : (
-                      /* Area / Line Trend Mode */
                       <>
-                        {(seriesFilter === 'all' || seriesFilter === 'debtor') && (
-                          <Area
-                            yAxisId="debtor"
-                            type="monotone"
-                            dataKey="opDebtor"
-                            name="Op Debtor"
-                            stroke="#60a5fa"
-                            strokeWidth={1.5}
-                            strokeDasharray="3 3"
-                            fillOpacity={1}
-                            fill="url(#multiOpDebtorAreaGrad)"
-                          />
-                        )}
-
-                        {(seriesFilter === 'all' || seriesFilter === 'debtor') && (
-                          <Area
-                            yAxisId="debtor"
-                            type="monotone"
-                            dataKey="closingDebtor"
-                            name="Closing Debtor"
-                            stroke="#2563eb"
-                            strokeWidth={2}
-                            fillOpacity={1}
-                            fill="url(#multiClosingDebtorAreaGrad)"
-                          />
-                        )}
-
-                        {(seriesFilter === 'all' || seriesFilter === 'npl') && (
-                          <Area
-                            yAxisId="npl"
-                            type="monotone"
-                            dataKey="closingNpl"
-                            name="Closing NPL"
-                            stroke="#e11d48"
-                            strokeWidth={2}
-                            fillOpacity={1}
-                            fill="url(#multiClosingNplAreaGrad)"
-                          />
-                        )}
-
-                        {(seriesFilter === 'all' || seriesFilter === 'saved') && (
-                          <Line
-                            yAxisId="npl"
-                            type="monotone"
-                            dataKey="savedAmt"
-                            name="NPL Saved"
-                            stroke="#10b981"
-                            strokeWidth={2.5}
-                            dot={<CustomizedMilestoneDot />}
-                            activeDot={{ r: 7, fill: '#10b981' }}
-                          />
-                        )}
+                        <Area
+                          type="monotone"
+                          dataKey="opDebtor"
+                          name="Opening Debtor"
+                          stroke="#60a5fa"
+                          strokeWidth={1.5}
+                          strokeDasharray="3 3"
+                          fillOpacity={1}
+                          fill="url(#splitOpDebtorAreaGrad)"
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="closingDebtor"
+                          name="Closing Debtor"
+                          stroke="#2563eb"
+                          strokeWidth={2}
+                          fillOpacity={1}
+                          fill="url(#splitClosingDebtorAreaGrad)"
+                        />
                       </>
                     )}
                   </ComposedChart>
                 </ResponsiveContainer>
               )}
             </div>
+          </div>
 
-            {/* Bottom Comparative Strip: Opening vs Closing Telemetry */}
-            <div className="mt-3 pt-2.5 border-t border-slate-200 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] tabular-nums">
-              <div className="bg-blue-50/50 dark:bg-blue-950/20 p-2 rounded-lg border border-blue-100 dark:border-blue-900/40">
+          {/* Debtor Summary Strip + Dedicated Debtor Table */}
+          <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+            <div className="grid grid-cols-3 gap-2 text-[11px] tabular-nums">
+              <div className="bg-blue-50/60 dark:bg-blue-950/20 p-2 rounded-lg border border-blue-100 dark:border-blue-900/40">
                 <span className="text-slate-500 dark:text-slate-400 block text-[10px]">
                   Opening Debtor
                 </span>
-                <span className="font-mono font-semibold text-blue-600 dark:text-blue-400">
+                <span className="font-mono font-bold text-blue-600 dark:text-blue-400">
                   {formatCompactRs(liveOpDebtorAmt)}
                 </span>
               </div>
-              <div className="bg-blue-50/50 dark:bg-blue-950/20 p-2 rounded-lg border border-blue-100 dark:border-blue-900/40">
-                <span className="text-slate-500 dark:text-slate-400 flex items-center justify-between text-[10px]">
-                  <span>Closing Debtor</span>
-                  <span className={`text-[9px] font-bold ${debtorMovement >= 0 ? 'text-blue-600 dark:text-blue-400' : 'text-slate-500'}`}>
-                    {debtorMovement >= 0 ? '+' : ''}{formatCompactRs(debtorMovement)}
-                  </span>
+              <div className="bg-blue-50/60 dark:bg-blue-950/20 p-2 rounded-lg border border-blue-100 dark:border-blue-900/40">
+                <span className="text-slate-500 dark:text-slate-400 block text-[10px]">
+                  Closing Debtor
                 </span>
-                <span className="font-mono font-semibold text-blue-700 dark:text-blue-300">
+                <span className="font-mono font-bold text-blue-700 dark:text-blue-300">
                   {formatCompactRs(liveClosingDebtorAmt)}
                 </span>
               </div>
-              <div className="bg-rose-50/50 dark:bg-rose-950/20 p-2 rounded-lg border border-rose-100 dark:border-rose-900/40">
+              <div className="bg-slate-50 dark:bg-slate-950 p-2 rounded-lg border border-slate-200/80 dark:border-slate-800 text-right">
                 <span className="text-slate-500 dark:text-slate-400 block text-[10px]">
-                  Opening NPL
+                  Debtor Variance
                 </span>
-                <span className="font-mono font-semibold text-rose-500 dark:text-rose-400">
-                  {formatCompactRs(liveOpNplAmt)}
-                </span>
-              </div>
-              <div className="bg-rose-50/50 dark:bg-rose-950/20 p-2 rounded-lg border border-rose-100 dark:border-rose-900/40">
-                <span className="text-slate-500 dark:text-slate-400 flex items-center justify-between text-[10px]">
-                  <span>Closing NPL</span>
-                  <span className={`text-[9px] font-bold ${nplMovement <= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                    {nplMovement <= 0 ? '' : '+'}{formatCompactRs(nplMovement)}
-                  </span>
-                </span>
-                <span className="font-mono font-semibold text-rose-700 dark:text-rose-300">
-                  {formatCompactRs(liveClosingNplAmt)}
+                <span
+                  className={`font-mono font-bold ${
+                    debtorMovement <= 0
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-blue-600 dark:text-blue-400'
+                  }`}
+                >
+                  {debtorMovement >= 0 ? '+' : ''}
+                  {formatCompactRs(debtorMovement)}
                 </span>
               </div>
             </div>
+
+            {trendChartData.length > 0 && (
+              <div className="overflow-x-auto border border-slate-200/80 dark:border-slate-800 rounded-xl">
+                <table className="w-full text-left border-collapse text-[11px]">
+                  <thead>
+                    <tr className="bg-slate-50 dark:bg-slate-950/70 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-semibold">
+                      <th className="py-2 px-3">Period</th>
+                      <th className="py-2 px-3 text-right">Opening Debtor</th>
+                      <th className="py-2 px-3 text-right">Closing Debtor</th>
+                      <th className="py-2 px-3 text-right">Net Change</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70 tabular-nums font-mono">
+                    {trendChartData.map((row, i) => (
+                      <tr key={`debtor_tbl_${i}`} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
+                        <td className="py-1.5 px-3 font-sans font-medium text-slate-800 dark:text-slate-200">
+                          {row.label}
+                        </td>
+                        <td className="py-1.5 px-3 text-right text-slate-600 dark:text-slate-300">
+                          {formatCurrencyRs(row.opDebtor)}
+                        </td>
+                        <td className="py-1.5 px-3 text-right font-semibold text-blue-700 dark:text-blue-400">
+                          {formatCurrencyRs(row.closingDebtor)}
+                        </td>
+                        <td
+                          className={`py-1.5 px-3 text-right font-semibold ${
+                            row.debtorDiff <= 0
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-blue-600 dark:text-blue-400'
+                          }`}
+                        >
+                          {row.debtorDiff >= 0 ? '+' : ''}
+                          {formatCompactRs(row.debtorDiff)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
 
+        {/* CARD 1B: Monthly NPL Trend (Opening vs. Closing & Saved) + NPL Table */}
+        <div
+          style={{ animationDelay: '90ms' }}
+          className="animate-fade-slide-up bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 shadow-lg shadow-slate-900/5 flex flex-col justify-between space-y-4"
+        >
+          <div>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                  <BarChart3 className="w-4 h-4 text-rose-600" />
+                  Monthly NPL Trend (Opening vs. Closing &amp; Saved)
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Opening NPL vs. Closing NPL &amp; Recovered NPL Saved Progression
+                </p>
+              </div>
+
+              <div className="inline-flex items-center gap-0.5 p-0.5 bg-slate-100 dark:bg-slate-950 rounded-lg text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setNplChartType('paired')}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 font-medium rounded whitespace-nowrap transition-colors ${
+                    nplChartType === 'paired'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-900'
+                  }`}
+                >
+                  <BarChart3 className="w-3 h-3 text-rose-500" />
+                  Bars
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNplChartType('area')}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 font-medium rounded whitespace-nowrap transition-colors ${
+                    nplChartType === 'area'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
+                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-900'
+                  }`}
+                >
+                  <Layers className="w-3 h-3 text-emerald-500" />
+                  Area
+                </button>
+              </div>
+            </div>
+
+            <div className="h-52 w-full">
+              {trendChartData.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl px-4">
+                  No NPL data yet. Upload an AERS Excel file or add tracked contracts.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart
+                    data={trendChartData}
+                    margin={{ top: 12, right: 12, left: -10, bottom: 0 }}
+                  >
+                    <defs>
+                      <linearGradient id="splitOpNplBarGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#fb7185" stopOpacity={0.9} />
+                        <stop offset="100%" stopColor="#f43f5e" stopOpacity={0.75} />
+                      </linearGradient>
+                      <linearGradient id="splitClosingNplBarGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#e11d48" stopOpacity={0.95} />
+                        <stop offset="100%" stopColor="#be123c" stopOpacity={0.85} />
+                      </linearGradient>
+                      <linearGradient id="splitSavedBarGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#10b981" stopOpacity={0.95} />
+                        <stop offset="100%" stopColor="#047857" stopOpacity={0.8} />
+                      </linearGradient>
+                      <linearGradient id="splitClosingNplAreaGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.4} />
+                        <stop offset="95%" stopColor="#f43f5e" stopOpacity={0.0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fill: axisColor, fontSize: 10, fontWeight: 500 }}
+                      axisLine={{ stroke: gridColor }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fill: axisColor, fontSize: 10 }}
+                      axisLine={false}
+                      tickLine={false}
+                      domain={[0, Math.ceil((maxNplVal * 1.25) / 1_000_000) * 1_000_000 || 10_000_000]}
+                      tickFormatter={(v) => `${(Number(v) / 1_000_000).toFixed(1)}M`}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: tooltipBg,
+                        borderColor: tooltipBorder,
+                        borderRadius: '12px',
+                        boxShadow: '0 10px 25px -5px rgba(0,0,0,0.12)',
+                        fontSize: '11px',
+                      }}
+                      formatter={(value: unknown, name: unknown) => [
+                        formatCurrencyRs(Number(value) || 0),
+                        String(name),
+                      ]}
+                    />
+                    <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '4px' }} />
+
+                    {nplChartType === 'paired' ? (
+                      <>
+                        <Bar
+                          dataKey="opNpl"
+                          name="Opening NPL"
+                          fill="url(#splitOpNplBarGrad)"
+                          stroke="#f43f5e"
+                          strokeWidth={1}
+                          radius={[4, 4, 0, 0]}
+                          maxBarSize={24}
+                        />
+                        <Bar
+                          dataKey="closingNpl"
+                          name="Closing NPL"
+                          fill="url(#splitClosingNplBarGrad)"
+                          stroke="#be123c"
+                          strokeWidth={1}
+                          radius={[4, 4, 0, 0]}
+                          maxBarSize={24}
+                        />
+                        <Bar
+                          dataKey="savedAmt"
+                          name="NPL Saved"
+                          fill="url(#splitSavedBarGrad)"
+                          stroke="#10b981"
+                          strokeWidth={1}
+                          radius={[4, 4, 0, 0]}
+                          maxBarSize={24}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <Area
+                          type="monotone"
+                          dataKey="closingNpl"
+                          name="Closing NPL"
+                          stroke="#e11d48"
+                          strokeWidth={2}
+                          fillOpacity={1}
+                          fill="url(#splitClosingNplAreaGrad)"
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="savedAmt"
+                          name="NPL Saved"
+                          stroke="#10b981"
+                          strokeWidth={2.5}
+                          dot={<CustomizedMilestoneDot />}
+                          activeDot={{ r: 7, fill: '#10b981' }}
+                        />
+                      </>
+                    )}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          {/* NPL Summary Strip + Dedicated NPL Table */}
+          <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+            <div className="grid grid-cols-3 gap-2 text-[11px] tabular-nums">
+              <div className="bg-rose-50/60 dark:bg-rose-950/20 p-2 rounded-lg border border-rose-100 dark:border-rose-900/40">
+                <span className="text-slate-500 dark:text-slate-400 block text-[10px]">
+                  Opening NPL
+                </span>
+                <span className="font-mono font-bold text-rose-500 dark:text-rose-400">
+                  {formatCompactRs(liveOpNplAmt)}
+                </span>
+              </div>
+              <div className="bg-rose-50/60 dark:bg-rose-950/20 p-2 rounded-lg border border-rose-100 dark:border-rose-900/40">
+                <span className="text-slate-500 dark:text-slate-400 block text-[10px]">
+                  Closing NPL
+                </span>
+                <span className="font-mono font-bold text-rose-700 dark:text-rose-300">
+                  {formatCompactRs(liveClosingNplAmt)}
+                </span>
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-950 p-2 rounded-lg border border-slate-200/80 dark:border-slate-800 text-right">
+                <span className="text-slate-500 dark:text-slate-400 block text-[10px]">
+                  NPL Net Movement
+                </span>
+                <span
+                  className={`font-mono font-bold ${
+                    nplMovement <= 0
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-rose-600 dark:text-rose-400'
+                  }`}
+                >
+                  {nplMovement > 0 ? '+' : ''}
+                  {formatCompactRs(nplMovement)}
+                </span>
+              </div>
+            </div>
+
+            {trendChartData.length > 0 && (
+              <div className="overflow-x-auto border border-slate-200/80 dark:border-slate-800 rounded-xl">
+                <table className="w-full text-left border-collapse text-[11px]">
+                  <thead>
+                    <tr className="bg-slate-50 dark:bg-slate-950/70 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-semibold">
+                      <th className="py-2 px-3">Period</th>
+                      <th className="py-2 px-3 text-right">Opening NPL</th>
+                      <th className="py-2 px-3 text-right">Closing NPL</th>
+                      <th className="py-2 px-3 text-right">NPL Saved</th>
+                      <th className="py-2 px-3 text-right">Variance</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70 tabular-nums font-mono">
+                    {trendChartData.map((row, i) => (
+                      <tr key={`npl_tbl_${i}`} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
+                        <td className="py-1.5 px-3 font-sans font-medium text-slate-800 dark:text-slate-200">
+                          {row.label}
+                        </td>
+                        <td className="py-1.5 px-3 text-right text-slate-600 dark:text-slate-300">
+                          {formatCurrencyRs(row.opNpl)}
+                        </td>
+                        <td className="py-1.5 px-3 text-right font-semibold text-rose-600 dark:text-rose-400">
+                          {formatCurrencyRs(row.closingNpl)}
+                        </td>
+                        <td className="py-1.5 px-3 text-right font-semibold text-emerald-600 dark:text-emerald-400">
+                          {formatCompactRs(row.savedAmt)}
+                        </td>
+                        <td
+                          className={`py-1.5 px-3 text-right font-semibold ${
+                            row.nplDiff <= 0
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-rose-600 dark:text-rose-400'
+                          }`}
+                        >
+                          {row.nplDiff > 0 ? '+' : ''}
+                          {formatCompactRs(row.nplDiff)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 2: Target Gauge & 91-DPD Risk Gauge (2 Side-by-Side Cards) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* CHART 2: NPL Saved vs. Fallen NPL - Gauge with a Target */}
         <div
-          style={{ animationDelay: '100ms' }}
+          style={{ animationDelay: '130ms' }}
           className="animate-fade-slide-up bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 shadow-lg shadow-slate-900/5 flex flex-col justify-between"
         >
           <div>
@@ -1061,13 +1147,11 @@ export function AnalyticsCharts({
                     </linearGradient>
                   </defs>
 
-                  {/* Background Track Arc (220 degrees from 160° to 380°) */}
                   <path
                     d={describeDonutSegment(140, 130, 88, 70, 160, 380)}
                     className="fill-slate-200 dark:fill-slate-800"
                   />
 
-                  {/* Filled Progress Arc for Saved Amount */}
                   {savedPctOfScale > 0 && (
                     <path
                       d={describeDonutSegment(
@@ -1083,7 +1167,6 @@ export function AnalyticsCharts({
                     />
                   )}
 
-                  {/* Target Indicator Line Marker */}
                   <line
                     x1={gaugeTargetInner.x}
                     y1={gaugeTargetInner.y}
@@ -1095,7 +1178,6 @@ export function AnalyticsCharts({
                     className="filter drop-shadow"
                   />
 
-                  {/* Target Flag Pin */}
                   <circle
                     cx={gaugeTargetPoint.x}
                     cy={gaugeTargetPoint.y}
@@ -1114,7 +1196,6 @@ export function AnalyticsCharts({
                   </text>
                 </svg>
 
-                {/* Center Numeric Readout */}
                 <div className="absolute top-16 inset-x-0 flex flex-col items-center justify-center text-center tabular-nums">
                   <span className="text-xl font-bold font-mono text-slate-900 dark:text-slate-100">
                     {formatCompactRs(activeSavedAmt)}
@@ -1125,7 +1206,6 @@ export function AnalyticsCharts({
                 </div>
               </div>
 
-              {/* Status Pill */}
               <div className="mt-1 flex items-center justify-center">
                 {activeSavedAmt >= targetAmount ? (
                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
@@ -1142,7 +1222,6 @@ export function AnalyticsCharts({
             </div>
           </div>
 
-          {/* Bottom Summary comparing Saved vs Fallen */}
           <div className="mt-2 pt-2.5 border-t border-slate-200 dark:border-slate-800 grid grid-cols-3 gap-2 text-[11px] tabular-nums">
             <div>
               <span className="text-slate-500 dark:text-slate-400 block">
@@ -1180,7 +1259,7 @@ export function AnalyticsCharts({
 
         {/* CHART 3: 91-DPD Risk Gauge - Animated SVG Doughnut Gauge (Borderline vs. Classified NPL) */}
         <div
-          style={{ animationDelay: '150ms' }}
+          style={{ animationDelay: '170ms' }}
           className="animate-fade-slide-up bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 shadow-lg shadow-slate-900/5 flex flex-col justify-between"
         >
           <div>
@@ -1196,7 +1275,6 @@ export function AnalyticsCharts({
               </div>
 
               <div className="flex flex-wrap items-center gap-1.5">
-                {/* View Mode Toggle: Bar Chart vs Doughnut */}
                 <div className="inline-flex items-center gap-0.5 p-0.5 bg-slate-100 dark:bg-slate-950 rounded-lg text-[10px]">
                   <button
                     type="button"
@@ -1224,7 +1302,6 @@ export function AnalyticsCharts({
                   </button>
                 </div>
 
-                {/* Exposure vs Count Metric Mode Toggle */}
                 <div className="inline-flex items-center gap-0.5 p-0.5 bg-slate-100 dark:bg-slate-950 rounded-md shrink-0 text-[10px]">
                   <button
                     type="button"
@@ -1252,7 +1329,6 @@ export function AnalyticsCharts({
               </div>
             </div>
 
-            {/* Sub-Filters / Focus Controls */}
             {riskViewType === 'bar' ? (
               <div className="flex items-center justify-between text-[11px] mb-1 px-1">
                 <span className="text-slate-500 dark:text-slate-400 font-medium">Bar Breakdown:</span>
@@ -1322,7 +1398,6 @@ export function AnalyticsCharts({
               </div>
             )}
 
-            {/* VIEW A: BAR CHART VIEW FOR BORDERLINE VS CLASSIFIED NPL */}
             {riskViewType === 'bar' ? (
               <div className="py-1">
                 <div className="h-48 w-full">
@@ -1387,7 +1462,6 @@ export function AnalyticsCharts({
                   </ResponsiveContainer>
                 </div>
 
-                {/* Status Classification Pill */}
                 <div className="mt-1 flex items-center justify-center">
                   {classifiedPct >= 60 ? (
                     <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
@@ -1407,15 +1481,12 @@ export function AnalyticsCharts({
                 </div>
               </div>
             ) : (
-              /* VIEW B: ANIMATED SVG DOUGHNUT GAUGE VIEW */
               <div className="py-1 flex flex-col items-center justify-center relative">
                 <div className="relative w-64 h-52 flex items-center justify-center">
-                  {/* Background radar sweep glow circle */}
                   <div className="absolute inset-5 rounded-full border border-dashed border-amber-500/20 dark:border-amber-400/15 animate-radar-spin pointer-events-none" />
 
                   <svg className="w-full h-full" viewBox="0 0 280 230">
                     <defs>
-                      {/* Borderline Amber Shimmer Gradient with Continuous Moving Light-Sweep */}
                       <linearGradient id="shimmerBorderlineGrad" x1="0%" y1="0%" x2="100%" y2="100%">
                         <stop offset="0%" stopColor="#d97706" stopOpacity="0.95" />
                         <stop offset="25%" stopColor="#f59e0b" stopOpacity="1" />
@@ -1431,7 +1502,6 @@ export function AnalyticsCharts({
                         <stop offset="100%" stopColor="#b45309" stopOpacity="0.95" />
                       </linearGradient>
 
-                      {/* Classified NPL Rose Shimmer Gradient with Continuous Moving Light-Sweep */}
                       <linearGradient id="shimmerClassifiedGrad" x1="100%" y1="0%" x2="0%" y2="100%">
                         <stop offset="0%" stopColor="#be123c" stopOpacity="0.95" />
                         <stop offset="25%" stopColor="#e11d48" stopOpacity="1" />
@@ -1448,7 +1518,6 @@ export function AnalyticsCharts({
                       </linearGradient>
                     </defs>
 
-                    {/* Outer Background Calibration Ring */}
                     <circle
                       cx={doughnutCx}
                       cy={doughnutCy}
@@ -1459,7 +1528,6 @@ export function AnalyticsCharts({
                       strokeDasharray="3 5"
                     />
 
-                    {/* Inner Track Ring */}
                     <circle
                       cx={doughnutCx}
                       cy={doughnutCy}
@@ -1471,13 +1539,11 @@ export function AnalyticsCharts({
                       opacity="0.5"
                     />
 
-                    {/* Doughnut Track Background */}
                     <path
                       d={describeDonutSegment(doughnutCx, doughnutCy, doughnutROuter, doughnutRInner, 0, 359.99)}
                       className="fill-slate-100 dark:fill-slate-800/60"
                     />
 
-                    {/* Segment 1: Borderline Arc */}
                     <path
                       d={describeDonutSegment(
                         doughnutCx,
@@ -1496,7 +1562,6 @@ export function AnalyticsCharts({
                       onMouseLeave={() => setHoveredRiskSegment('all')}
                     />
 
-                    {/* Segment 2: Classified NPL Arc */}
                     <path
                       d={describeDonutSegment(
                         doughnutCx,
@@ -1515,7 +1580,6 @@ export function AnalyticsCharts({
                       onMouseLeave={() => setHoveredRiskSegment('all')}
                     />
 
-                    {/* Real-time Orbiting Light-Sweep Radar Particle */}
                     <g>
                       <animateTransform
                         attributeName="transform"
@@ -1545,7 +1609,6 @@ export function AnalyticsCharts({
                     </g>
                   </svg>
 
-                  {/* Central Interactive Telemetry Display */}
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-center tabular-nums pointer-events-none px-4">
                     {hoveredRiskSegment === 'borderline' ? (
                       <>
@@ -1598,7 +1661,6 @@ export function AnalyticsCharts({
                   </div>
                 </div>
 
-                {/* Severity Pill */}
                 <div className="mt-0.5 flex items-center justify-center">
                   {classifiedPct >= 60 ? (
                     <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
@@ -1620,7 +1682,6 @@ export function AnalyticsCharts({
             )}
           </div>
 
-          {/* Sub-breakdown: Borderline vs Classified NPL */}
           <div className="mt-2 pt-2.5 border-t border-slate-200 dark:border-slate-800 space-y-2 text-xs tabular-nums">
             <div className="grid grid-cols-2 gap-2 text-center">
               <div
@@ -1670,7 +1731,6 @@ export function AnalyticsCharts({
               </div>
             </div>
 
-            {/* Continuous Shimmering Split Bar */}
             <div className="space-y-1">
               <div className="h-2 w-full bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden flex">
                 <div
@@ -1693,62 +1753,10 @@ export function AnalyticsCharts({
         </div>
       </div>
 
-      {/* Visit Effectiveness Breakdown with Shimmering Progress Bars */}
-      <div
-        style={{ animationDelay: '200ms' }}
-        className="animate-fade-slide-up bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 shadow-lg shadow-slate-900/5"
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Visit Effectiveness &amp; Success Rates by Channel
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Continuously shimmering success rate bars for field recovery officers &amp; channel attribution
-            </p>
-          </div>
-          <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-            {contracts.length} tracked contracts
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {visitStats.map((stat) => (
-            <div
-              key={stat.option}
-              className="p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 space-y-3"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                  {stat.option}
-                </span>
-                <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                  {stat.successRate}% Success
-                </span>
-              </div>
-
-              {/* Continuously Shimmering Animated Progress Bar */}
-              <div className="h-2.5 w-full bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-emerald-600 rounded-full animate-stripe-flow transition-all duration-1000 ease-out"
-                  style={{ width: `${stat.successRate}%` }}
-                />
-              </div>
-
-              <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
-                <span>{stat.totalVisits} visits logged</span>
-                <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                  {stat.savedOrPositive} positive
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
+      {/* SECTION 3: Monthly Snapshots Ledger */}
       {showSnapshotLedger && (
         <div
-          style={{ animationDelay: '250ms' }}
+          style={{ animationDelay: '220ms' }}
           className="animate-fade-slide-up bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 shadow-lg shadow-slate-900/5 space-y-4"
         >
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
