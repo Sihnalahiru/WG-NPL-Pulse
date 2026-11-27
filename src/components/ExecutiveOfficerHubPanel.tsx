@@ -46,6 +46,14 @@ interface ExecutiveOfficerHubPanelProps {
   onAddFromMaster?: (record: AersRecord) => void;
 }
 
+function asArray<T>(val: unknown): T[] {
+  return Array.isArray(val) ? (val as T[]) : [];
+}
+
+function asStr(val: unknown): string {
+  return typeof val === 'string' ? val : val == null || typeof val === 'boolean' ? '' : String(val);
+}
+
 export function ExecutiveOfficerHubPanel({
   aersRecords,
   aersMeta,
@@ -64,49 +72,144 @@ export function ExecutiveOfficerHubPanel({
   const [perfScope, setPerfScope] = useState<'individual' | 'branch'>('individual');
   const [bulkText, setBulkText] = useState('');
 
-  const safeAers = Array.isArray(aersRecords) ? aersRecords : [];
-  const safeTracked = Array.isArray(trackedContracts) ? trackedContracts : [];
-  const safeSnapshots = Array.isArray(monthlySnapshots) ? monthlySnapshots : [];
-  const safeMrpMap = mrpMap instanceof Map ? mrpMap : new Map<string, MrpEnrichment>();
+  const safeAers = useMemo(() => {
+    return asArray<AersRecord>(aersRecords)
+      .filter((r) => r && typeof r === 'object' && !Array.isArray(r))
+      .map((r) => ({
+        ...r,
+        contractNo: asStr(r.contractNo),
+        cusName: asStr(r.cusName),
+        mobileNo: asStr(r.mobileNo),
+        address: asStr(r.address),
+        officeType: asStr(r.officeType),
+        recoveryOfficer: asStr(r.recoveryOfficer),
+        marketingOfficer: asStr(r.marketingOfficer),
+        nplReason: asStr(r.nplReason),
+        worstCaseProduct: asStr(r.worstCaseProduct),
+        lastPayDate: asStr(r.lastPayDate),
+        currentStock: asStr(r.currentStock),
+      }))
+      .filter((r) => r.contractNo.length > 0);
+  }, [aersRecords]);
+
+  const safeTracked = useMemo(() => {
+    return asArray<TrackedContract>(trackedContracts)
+      .filter((c) => c && typeof c === 'object' && !Array.isArray(c))
+      .map((c) => ({
+        ...c,
+        contractNo: asStr(c.contractNo),
+        cusName: asStr(c.cusName),
+        officeType: asStr(c.officeType),
+        recoveryOfficer: asStr(c.recoveryOfficer),
+        marketingOfficer: asStr(c.marketingOfficer),
+        ro: asStr(c.ro),
+        nplReason: asStr(c.nplReason),
+        worstCaseProduct: asStr(c.worstCaseProduct),
+        visitHistory: asArray(c.visitHistory),
+      }))
+      .filter((c) => c.contractNo.length > 0);
+  }, [trackedContracts]);
+
+  const safeSnapshots = useMemo(
+    () =>
+      asArray<MonthlySnapshot>(monthlySnapshots).filter(
+        (s) => s && typeof s === 'object' && !Array.isArray(s),
+      ),
+    [monthlySnapshots],
+  );
+
+  const safeMrpMap = useMemo(() => {
+    const out = new Map<string, MrpEnrichment>();
+    if (mrpMap instanceof Map) {
+      mrpMap.forEach((v, k) => {
+        if (typeof k === 'string' && v && typeof v === 'object' && !Array.isArray(v)) {
+          out.set(k, {
+            ...v,
+            paymentPattern: asArray(v.paymentPattern),
+          });
+        }
+      });
+    }
+    return out;
+  }, [mrpMap]);
+
+  const safeBaseline = useMemo<OpeningOfficerBaseline | null>(() => {
+    if (!openingBaseline || typeof openingBaseline !== 'object' || Array.isArray(openingBaseline)) {
+      return null;
+    }
+    const cleanOfficers: OpeningOfficerBaseline['officers'] = {};
+    if (
+      openingBaseline.officers &&
+      typeof openingBaseline.officers === 'object' &&
+      !Array.isArray(openingBaseline.officers)
+    ) {
+      for (const [k, v] of Object.entries(openingBaseline.officers)) {
+        if (v && typeof v === 'object' && !Array.isArray(v)) {
+          cleanOfficers[k] = v;
+        }
+      }
+    }
+    return {
+      ...openingBaseline,
+      officers: cleanOfficers,
+    };
+  }, [openingBaseline]);
 
   const trackedSet = useMemo(
-    () =>
-      new Set(
-        safeTracked
-          .filter((c) => c && typeof c === 'object' && typeof c.contractNo === 'string')
-          .map((c) => normalizeContractNo(c.contractNo)),
-      ),
+    () => new Set(safeTracked.map((c) => normalizeContractNo(c.contractNo))),
     [safeTracked],
   );
 
   const evaluableItems = useMemo(() => {
-    return safeAers.length > 0
-      ? normalizeEvaluableFromAers(safeAers, trackedSet, safeMrpMap)
-      : normalizeEvaluableFromTracked(safeTracked);
+    try {
+      const raw =
+        safeAers.length > 0
+          ? normalizeEvaluableFromAers(safeAers, trackedSet, safeMrpMap)
+          : normalizeEvaluableFromTracked(safeTracked);
+      return asArray(raw);
+    } catch {
+      return [];
+    }
   }, [safeAers, safeTracked, trackedSet, safeMrpMap]);
 
-  const officerRows = useMemo(
-    () => computeOfficerOpeningClosing(evaluableItems, openingBaseline),
-    [evaluableItems, openingBaseline],
-  );
+  const officerRows = useMemo(() => {
+    try {
+      return asArray(computeOfficerOpeningClosing(evaluableItems, safeBaseline));
+    } catch {
+      return [];
+    }
+  }, [evaluableItems, safeBaseline]);
 
   const officerCards = useMemo(() => {
     const officeMap = new Map<string, string>();
     for (const item of evaluableItems) {
-      if (item.officer && !officeMap.has(item.officer)) {
-        officeMap.set(item.officer, item.officeType);
+      if (item && typeof item.officer === 'string' && item.officer && !officeMap.has(item.officer)) {
+        officeMap.set(item.officer, asStr(item.officeType));
       }
     }
 
     return officerRows.map((row) => {
-      const officerItems = evaluableItems.filter((i) => i.officer === row.officer);
-      const borderline = analyzeNextMonthBorderline(officerItems);
+      const officerItems = evaluableItems.filter((i) => i && i.officer === row.officer);
+      let borderline = { totalCount: 0, totalCapitalAtRisk: 0, totalMinToSave: 0 };
+      try {
+        const res = analyzeNextMonthBorderline(officerItems);
+        if (res && typeof res === 'object') {
+          borderline = {
+            totalCount: Number(res.totalCount) || 0,
+            totalCapitalAtRisk: Number(res.totalCapitalAtRisk) || 0,
+            totalMinToSave: Number(res.totalMinToSave) || 0,
+          };
+        }
+      } catch {
+        // Fallback zeros
+      }
+
       const totalEfforts = officerItems.reduce(
-        (sum, i) => sum + (i.assignOfficerEfforts || 0),
+        (sum, i) => sum + (Number(i.assignOfficerEfforts) || 0),
         0,
       );
       const contactedCount = officerItems.filter(
-        (i) => (i.assignOfficerEfforts || 0) > 0,
+        (i) => (Number(i.assignOfficerEfforts) || 0) > 0,
       ).length;
       const effortCoveragePct =
         officerItems.length > 0
@@ -130,22 +233,17 @@ export function ExecutiveOfficerHubPanel({
   }, [evaluableItems, officerRows]);
 
   const bulkTokens = useMemo(() => {
-    return Array.from(
-      new Set(
-        bulkText
-          .split(/[\s,;|\n\r]+/)
-          .map((t) => normalizeContractNo(t))
-          .filter((t) => t.length >= 4),
-      ),
-    );
+    const parts = asStr(bulkText)
+      .split(/[\s,;|\n\r]+/)
+      .map((t) => normalizeContractNo(t))
+      .filter((t) => t.length >= 4);
+    return Array.from(new Set(parts));
   }, [bulkText]);
 
   const monitoredContracts = useMemo(() => {
     const aersByNo = new Map<string, AersRecord>();
     safeAers.forEach((r) => {
-      if (r && typeof r.contractNo === 'string') {
-        aersByNo.set(normalizeContractNo(r.contractNo), r);
-      }
+      aersByNo.set(normalizeContractNo(r.contractNo), r);
     });
 
     if (bulkTokens.length > 0) {
@@ -156,25 +254,25 @@ export function ExecutiveOfficerHubPanel({
         );
         const mrp = safeMrpMap.get(tok) ?? tracked?.mrp;
         const efforts =
-          aers?.assignOfficerEfforts ?? tracked?.assignOfficerEfforts ?? 0;
-        const totalEff = aers?.totalEfforts ?? tracked?.totalEfforts ?? 0;
+          Number(aers?.assignOfficerEfforts ?? tracked?.assignOfficerEfforts) || 0;
+        const totalEff = Number(aers?.totalEfforts ?? tracked?.totalEfforts) || 0;
         const officer = aers
-          ? getOfficerByOfficeType(aers)
+          ? asStr(getOfficerByOfficeType(aers)) || 'Unassigned'
           : tracked
-            ? getOfficerByOfficeType(tracked)
+            ? asStr(getOfficerByOfficeType(tracked)) || 'Unassigned'
             : 'Unassigned';
-        const dpd = aers?.actualDpd ?? tracked?.actualDpd ?? 0;
-        const npl = aers?.npl ?? tracked?.npl ?? 0;
-        const debtor = aers?.closingDebtor ?? tracked?.closingDebtor ?? 0;
+        const dpd = Number(aers?.actualDpd ?? tracked?.actualDpd) || 0;
+        const npl = Number(aers?.npl ?? tracked?.npl) || 0;
+        const debtor = Number(aers?.closingDebtor ?? tracked?.closingDebtor) || 0;
         const minSave =
-          aers?.minAmountToReverseNpl ?? tracked?.minAmountToReverseNpl ?? 0;
+          Number(aers?.minAmountToReverseNpl ?? tracked?.minAmountToReverseNpl) || 0;
         const progressPct = Math.min(100, Math.round((efforts / 3) * 100));
 
         return {
           contractNo: tok,
-          cusName: aers?.cusName || tracked?.cusName || 'Not in AERS Index',
+          cusName: asStr(aers?.cusName || tracked?.cusName) || 'Not in AERS Index',
           officer,
-          officeType: aers?.officeType || tracked?.officeType || '',
+          officeType: asStr(aers?.officeType || tracked?.officeType),
           dpd,
           npl,
           debtor,
@@ -186,7 +284,7 @@ export function ExecutiveOfficerHubPanel({
             efforts > 0 || (Array.isArray(tracked?.visitHistory) && tracked.visitHistory.length > 0),
           isTracked: Boolean(tracked),
           aersRecord: aers,
-          notPaidSummary: mrp?.notPaidSummary || '',
+          notPaidSummary: asStr(mrp?.notPaidSummary),
         };
       });
     }
@@ -195,7 +293,7 @@ export function ExecutiveOfficerHubPanel({
       selectedOfficer === 'ALL'
         ? safeAers.slice(0, 20)
         : safeAers
-            .filter((r) => getOfficerByOfficeType(r) === selectedOfficer)
+            .filter((r) => asStr(getOfficerByOfficeType(r)) === selectedOfficer)
             .slice(0, 25);
 
     return pool.map((aers) => {
@@ -204,25 +302,25 @@ export function ExecutiveOfficerHubPanel({
         (c) => normalizeContractNo(c.contractNo) === tok,
       );
       const mrp = safeMrpMap.get(tok) ?? tracked?.mrp;
-      const efforts = aers.assignOfficerEfforts || 0;
+      const efforts = Number(aers.assignOfficerEfforts) || 0;
       const progressPct = Math.min(100, Math.round((efforts / 3) * 100));
       return {
         contractNo: tok,
-        cusName: aers.cusName,
-        officer: getOfficerByOfficeType(aers),
-        officeType: aers.officeType || '',
-        dpd: aers.actualDpd || 0,
-        npl: aers.npl || 0,
-        debtor: aers.closingDebtor || 0,
-        minSave: aers.minAmountToReverseNpl || 0,
+        cusName: asStr(aers.cusName),
+        officer: asStr(getOfficerByOfficeType(aers)) || 'Unassigned',
+        officeType: asStr(aers.officeType),
+        dpd: Number(aers.actualDpd) || 0,
+        npl: Number(aers.npl) || 0,
+        debtor: Number(aers.closingDebtor) || 0,
+        minSave: Number(aers.minAmountToReverseNpl) || 0,
         efforts,
-        totalEff: aers.totalEfforts || 0,
+        totalEff: Number(aers.totalEfforts) || 0,
         progressPct,
         hasCallOrVisit:
           efforts > 0 || (Array.isArray(tracked?.visitHistory) && tracked.visitHistory.length > 0),
         isTracked: Boolean(tracked),
         aersRecord: aers,
-        notPaidSummary: mrp?.notPaidSummary || '',
+        notPaidSummary: asStr(mrp?.notPaidSummary),
       };
     });
   }, [bulkTokens, safeAers, safeTracked, safeMrpMap, selectedOfficer]);
@@ -233,15 +331,15 @@ export function ExecutiveOfficerHubPanel({
         ? officerCards.find((c) => c.officer === selectedOfficer)
         : null;
 
-    const totalOpNpl = officerCards.reduce((s, c) => s + c.openingNpl, 0);
-    const totalCloseNpl = officerCards.reduce((s, c) => s + c.closingNpl, 0);
+    const totalOpNpl = officerCards.reduce((s, c) => s + (Number(c.openingNpl) || 0), 0);
+    const totalCloseNpl = officerCards.reduce((s, c) => s + (Number(c.closingNpl) || 0), 0);
     const branchNetDelta = totalOpNpl - totalCloseNpl;
 
     const targetName = activeCard
       ? `${activeCard.officer} (${activeCard.officeType})`
       : 'Entire Branch';
-    const targetOpNpl = activeCard ? activeCard.openingNpl : totalOpNpl;
-    const targetCloseNpl = activeCard ? activeCard.closingNpl : totalCloseNpl;
+    const targetOpNpl = activeCard ? Number(activeCard.openingNpl) || 0 : totalOpNpl;
+    const targetCloseNpl = activeCard ? Number(activeCard.closingNpl) || 0 : totalCloseNpl;
     const targetDelta = targetOpNpl - targetCloseNpl;
     const targetBorderlineCount = activeCard
       ? activeCard.borderlineCount
@@ -250,8 +348,8 @@ export function ExecutiveOfficerHubPanel({
       ? activeCard.borderlineMinSave
       : officerCards.reduce((s, c) => s + c.borderlineMinSave, 0);
     const targetZeroEffort = activeCard
-      ? activeCard.zeroEffortBorderlineCount
-      : officerCards.reduce((s, c) => s + c.zeroEffortBorderlineCount, 0);
+      ? Number(activeCard.zeroEffortBorderlineCount) || 0
+      : officerCards.reduce((s, c) => s + (Number(c.zeroEffortBorderlineCount) || 0), 0);
 
     const suggestions: {
       tone: 'positive' | 'warning' | 'critical';
@@ -300,18 +398,19 @@ export function ExecutiveOfficerHubPanel({
   }, [officerCards, selectedOfficer]);
 
   const campaignSeries = useMemo(() => {
-    return CAMPAIGN_MONTHS.map((m) => {
+    const months = asArray<{ monthKey: string; label: string }>(CAMPAIGN_MONTHS);
+    return months.map((m) => {
       const snaps = safeSnapshots.filter((s) => s.monthKey === m.monthKey);
       const latest = snaps[snaps.length - 1];
       return {
         ...m,
         hasData: Boolean(latest),
-        nplAmount: latest ? latest.branchNpl || latest.trackedNpl : 0,
-        savedAmount: latest ? latest.nplSavedAmount : 0,
+        nplAmount: latest ? Number(latest.branchNpl || latest.trackedNpl) || 0 : 0,
+        savedAmount: latest ? Number(latest.nplSavedAmount) || 0 : 0,
         collectionPct: latest
-          ? latest.branchCollectionPct || latest.collectionPct
+          ? Number(latest.branchCollectionPct || latest.collectionPct) || 0
           : 0,
-        snapshotDate: latest?.snapshotDate || 'Pending',
+        snapshotDate: asStr(latest?.snapshotDate) || 'Pending',
       };
     });
   }, [safeSnapshots]);
@@ -438,7 +537,7 @@ export function ExecutiveOfficerHubPanel({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {officerCards.map((card) => {
                 const isSelected = selectedOfficer === card.officer;
-                const variance = card.openingNpl - card.closingNpl;
+                const variance = (Number(card.openingNpl) || 0) - (Number(card.closingNpl) || 0);
                 return (
                   <button
                     key={card.officer}
@@ -774,7 +873,7 @@ export function ExecutiveOfficerHubPanel({
                 </span>
                 <div className="mt-1 text-base font-mono font-bold text-slate-900 dark:text-slate-100">
                   {formatCompactRs(
-                    officerCards.reduce((s, c) => s + c.openingNpl, 0),
+                    officerCards.reduce((s, c) => s + (Number(c.openingNpl) || 0), 0),
                   )}
                 </div>
               </div>
@@ -784,7 +883,7 @@ export function ExecutiveOfficerHubPanel({
                 </span>
                 <div className="mt-1 text-base font-mono font-bold text-rose-600 dark:text-rose-400">
                   {formatCompactRs(
-                    officerCards.reduce((s, c) => s + c.closingNpl, 0),
+                    officerCards.reduce((s, c) => s + (Number(c.closingNpl) || 0), 0),
                   )}
                 </div>
               </div>
@@ -805,7 +904,7 @@ export function ExecutiveOfficerHubPanel({
                 <div className="mt-1 text-base font-mono font-bold text-emerald-600 dark:text-emerald-400">
                   {formatCompactRs(
                     officerCards.reduce(
-                      (s, c) => s + (c.openingNpl - c.closingNpl),
+                      (s, c) => s + ((Number(c.openingNpl) || 0) - (Number(c.closingNpl) || 0)),
                       0,
                     ),
                   )}
@@ -828,7 +927,7 @@ export function ExecutiveOfficerHubPanel({
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800 tabular-nums">
                   {officerCards.map((c) => {
-                    const delta = c.openingNpl - c.closingNpl;
+                    const delta = (Number(c.openingNpl) || 0) - (Number(c.closingNpl) || 0);
                     return (
                       <tr key={c.officer}>
                         <td className="py-2 px-3 font-semibold text-slate-900 dark:text-slate-100">
