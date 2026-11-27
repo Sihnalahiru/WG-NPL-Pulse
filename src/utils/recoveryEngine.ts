@@ -80,6 +80,29 @@ export const CAMPAIGN_MONTHS: { monthKey: string; label: string }[] = [
   { monthKey: '2027-03', label: 'Mar 2027' },
 ];
 
+export function stripOfficerPrefix(name?: string): string {
+  return (name || '').replace(/^(ro|mo)\s*:\s*/i, '').trim();
+}
+
+export function isMarketingOfficeType(officeType?: string): boolean {
+  const ot = (officeType || '').trim().toUpperCase();
+  return ot === 'MO' || ot.startsWith('MO ') || ot.includes('MARKETING');
+}
+
+export function getOfficerByOfficeType(rec: {
+  officeType?: string;
+  marketingOfficer?: string;
+  recoveryOfficer?: string;
+  ro?: string;
+}): string {
+  const mo = stripOfficerPrefix(rec.marketingOfficer);
+  const ro = stripOfficerPrefix(rec.recoveryOfficer || rec.ro);
+  if (isMarketingOfficeType(rec.officeType)) {
+    return mo || ro || 'Unassigned';
+  }
+  return ro || mo || 'Unassigned';
+}
+
 export function isWorstCategory(
   nplReason?: string,
   worstCaseProduct?: string,
@@ -199,7 +222,6 @@ export function isNplSavedAccount(rec: {
   totalCollection?: number;
   lastPaidAmount?: number;
 }): boolean {
-  // Any account currently in NPL or forecast to cross 91 DPD on 30th cannot be NPL Saved
   if (
     (rec.npl || 0) > 0 ||
     (rec.actualDpd || 0) >= 91 ||
@@ -209,12 +231,10 @@ export function isNplSavedAccount(rec: {
   }
   if (rec.currentSituation === 'NPL SAVED') return true;
 
-  // Case 1: Opening NPL (1st of month Op Npl > 0) reversed below 91 DPD ("SAVED NPL FROM ABOVE 3")
   if ((rec.opNpl || 0) > 0) {
     return true;
   }
 
-  // Case 2: Started 1st of month in Borderline (OP_AGE >= 2.01 & < 3.00) & kept < 91 DPD via payment/safe forecast ("NPL BORDER SAVING")
   const forecast = rec.monthEndForecastDpd ?? 0;
   const hasPaymentOrSafeForecast =
     (rec.totalCollection || 0) > 0 ||
@@ -283,7 +303,6 @@ export function isBorderlineNplAccount(
 ): boolean {
   if ((rec.actualDpd || 0) >= 91 || (rec.npl || 0) > 0) return false;
   if (rec.currentSituation === 'NPL SAVED') return false;
-  // Paid down from 1st-of-month risk to safely < 80 forecast & < 61 DPD
   if (
     isNplSavedAccount(rec) &&
     (rec.actualDpd || 0) < 61 &&
@@ -313,7 +332,6 @@ export function isEligibleNplOrBorderline(
   mrpOverride?: MrpEnrichment,
 ): boolean {
   const mrp = mrpOverride ?? rec.mrp;
-  // Ignore regular / performing contracts
   if (
     (rec.opAge || 0) < 2.0 &&
     (rec.npl || 0) === 0 &&
@@ -357,7 +375,6 @@ export function isBrokenPromiseToPay(
   }
   if (!contract.ppDate) return false;
   if (contract.ppDate >= todayISO) return false;
-  // P/P Date has passed and LAST_PAY_DATE is older than Visit Date (or missing)
   if (!contract.lastPayDate) return true;
   if (!contract.visitDate) return contract.lastPayDate < contract.ppDate;
   return contract.lastPayDate < contract.visitDate;
@@ -388,7 +405,6 @@ export function normalizeVehicleNo(value: string): string {
     .replace(/^(WP|CP|SP|NP|EP|NW|NC|SG|UVA)\s+/i, '')
     .replace(/\s+/g, '-')
     .replace(/[^A-Z0-9-]/g, '');
-  // Ensure hyphen between prefix letters/digits and 4-digit suffix if missing
   const match = cleaned.match(/^([A-Z]{1,3}|[0-9]{2,3})-?([0-9]{4})$/);
   if (match) {
     return `${match[1]}-${match[2]}`;
@@ -410,7 +426,6 @@ function parseNumeric(val: unknown): number {
 function parseExcelDate(val: unknown): string {
   if (val === null || val === undefined || val === '') return '';
   if (typeof val === 'number') {
-    // Excel serial date number
     const parsed = XLSX.SSF.parse_date_code(val);
     if (parsed && parsed.y && parsed.m && parsed.d) {
       return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
@@ -418,12 +433,10 @@ function parseExcelDate(val: unknown): string {
   }
   const str = String(val).trim();
   if (!str || str === '-' || str.toLowerCase() === 'null') return '';
-  // Try YYYY-MM-DD or YYYY/MM/DD
   const isoMatch = str.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
   if (isoMatch) {
     return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
   }
-  // Try DD/MM/YYYY or DD-MM-YYYY
   const dmyMatch = str.match(/(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
   if (dmyMatch) {
     return `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
@@ -489,7 +502,6 @@ function parseAersRows(
     throw new Error('No rows found in the provided AERS data.');
   }
 
-  // Extract Printed Date and Time from top 4 rows if present
   let printedDateTime = '';
   for (let r = 0; r < Math.min(4, rows.length); r++) {
     const joined = (rows[r] || []).map((c) => String(c ?? '')).join(' ');
@@ -506,7 +518,6 @@ function parseAersRows(
     printedDateTime = `${getTodayISO()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:00`;
   }
 
-  // Find header row (Row 3 = index 2 by spec, or scan first 8 rows for CONTRACT_NO)
   let headerRowIdx = -1;
   for (let r = 0; r < Math.min(8, rows.length); r++) {
     const cells = (rows[r] || []).map((c) =>
@@ -529,7 +540,6 @@ function parseAersRows(
         .replace(/\s+/g, ' '),
     );
   } else {
-    // User pasted raw Excel rows without headers: map using standard 38-column AERS layout
     const firstRow = rows[0] || [];
     const col0 = String(firstRow[0] ?? '').trim();
     const looksLikeContractInCol0 = /^[A-Z]{2,}[0-9]{4,}$/i.test(col0);
@@ -592,8 +602,12 @@ function parseAersRows(
       lastPaidAmount: parseNumeric(getCell(row, 'last_paid_amount')),
       contractStatus: String(getCell(row, 'contract_status') ?? '').trim(),
       recoveryStatus: String(getCell(row, 'recovery_status') ?? '').trim(),
-      marketingOfficer: String(getCell(row, 'marketing_officer') ?? '').trim(),
-      recoveryOfficer: String(getCell(row, 'recovery_officer') ?? '').trim(),
+      marketingOfficer: stripOfficerPrefix(
+        String(getCell(row, 'marketing_officer') ?? ''),
+      ),
+      recoveryOfficer: stripOfficerPrefix(
+        String(getCell(row, 'recovery_officer') ?? ''),
+      ),
       financeAmount: parseNumeric(getCell(row, 'finance_amount')),
       currentStock: String(getCell(row, 'current_stock') ?? '').trim(),
       department: String(getCell(row, 'department') ?? '').trim(),
@@ -668,7 +682,6 @@ function matchPaymentMonthSlot(
   const str = String(headerCell ?? '').trim();
   if (!str) return null;
 
-  // Match 2026-01-01 .. 2026-10-01 or 2026/01/01 or 2026-01
   const isoMatch = str.match(/202[67][-/](0?[1-9]|1[0-2])(?:[-/]\d{1,2})?/);
   if (isoMatch) {
     const m = Number(isoMatch[1]);
@@ -693,7 +706,6 @@ function parseMrpSheet(rows: unknown[][]): Map<string, MrpEnrichment> {
   const mrpMap = new Map<string, MrpEnrichment>();
   if (rows.length === 0) return mrpMap;
 
-  // Headers at Row 2 (index 1) or scan first 6 rows for CONTRACT NO / CONTRACT_NO
   let headerRowIdx = -1;
   for (let r = 0; r < Math.min(6, rows.length); r++) {
     const cells = (rows[r] || []).map((c) =>
@@ -813,7 +825,6 @@ function parseSheet2Watchlist(rows: unknown[][]): Sheet2WatchlistRow[] {
   const results: Sheet2WatchlistRow[] = [];
   if (rows.length === 0) return results;
 
-  // Headers at Row 2 (index 1) or scan top 6 rows
   let headerRowIdx = -1;
   for (let r = 0; r < Math.min(6, rows.length); r++) {
     const cells = (rows[r] || []).map((c) =>
@@ -857,7 +868,9 @@ function parseSheet2Watchlist(rows: unknown[][]): Sheet2WatchlistRow[] {
       no: getCell(row, 'no'),
       contractNo,
       name: getCell(row, 'name', 'cus_name', 'customer name'),
-      ro: getCell(row, 'ro', 'recovery_officer', 'recovery officer'),
+      ro: stripOfficerPrefix(
+        getCell(row, 'ro', 'recovery_officer', 'recovery officer'),
+      ),
     });
   }
 
@@ -870,7 +883,6 @@ function applyStrictNplUniverseFilter(
   watchlistImports?: Sheet2WatchlistRow[],
 ): ParsedAersResult {
   const allRecords = baseResult.records;
-  // Capture full-branch BM snapshot before excluding performing contracts
   const bmBranchSnapshot = {
     ageBuckets: computeBmAgeBuckets(allRecords, []),
     roPerformance: computeBmOfficerPerformance(allRecords, [], 'RO'),
@@ -918,7 +930,6 @@ export function parseAersWorkbook(
     sheetLookup.set(name.trim().toLowerCase(), name);
   });
 
-  // 1. Identify primary AERS sheet ('aers', 'sheet1', or fallback to first sheet)
   const aersSheetName =
     sheetLookup.get('aers') ??
     sheetLookup.get('sheet1') ??
@@ -932,7 +943,6 @@ export function parseAersWorkbook(
 
   const baseResult = parseAersRows(aersRows, fileName);
 
-  // 2. Detect optional MRP sheet BEFORE filtering so BORDER NPL flags apply cleanly
   const mrpSheetName =
     sheetLookup.get('mrp') ??
     workbook.SheetNames.find((n) => n.trim().toLowerCase().includes('mrp'));
@@ -948,7 +958,6 @@ export function parseAersWorkbook(
     }
   }
 
-  // 3. Detect optional Sheet2 (RO Watchlist)
   const sheet2Name =
     sheetLookup.get('sheet2') ??
     sheetLookup.get('ro watchlist') ??
@@ -1021,7 +1030,6 @@ export function syncTrackedContractsWithAers(
   const mrpMap = options?.mrpMap;
   const watchlistImports = options?.watchlistImports ?? [];
 
-  // Merge Sheet2 RO Watchlist contracts strictly for NPL / Borderline accounts without duplicating
   const existingKeys = new Set(
     tracked.map((c) => normalizeContractNo(c.contractNo)),
   );
@@ -1036,14 +1044,18 @@ export function syncTrackedContractsWithAers(
     const match = aersMap.get(key);
     const mrpHit = mrpMap?.get(key);
     if (!match && !mrpHit?.borderNpl) {
-      // Excluded as regular/performing (or absent from NPL/Borderline universe)
       skippedRegularSheet2Count += 1;
       continue;
     }
 
     existingKeys.add(key);
     importedFromSheet2Count += 1;
-    const roName = row.ro || match?.recoveryOfficer || '';
+
+    // Enforce Office Type MO -> Marketing Officer, RO -> Recovery Officer
+    const assignedOfficer = match
+      ? getOfficerByOfficeType(match)
+      : stripOfficerPrefix(row.ro);
+
     seededFromSheet2.push({
       contractNo: key,
       cusName: match?.cusName || row.name || 'Unnamed Client',
@@ -1064,8 +1076,8 @@ export function syncTrackedContractsWithAers(
       actualDpd: match?.actualDpd ?? 0,
       monthEndForecastDpd: match?.monthEndForecastDpd ?? 0,
       minAmountToReverseNpl: match?.minAmountToReverseNpl ?? 0,
-      recoveryOfficer: match?.recoveryOfficer || roName,
-      marketingOfficer: match?.marketingOfficer || '',
+      recoveryOfficer: stripOfficerPrefix(match?.recoveryOfficer || row.ro),
+      marketingOfficer: stripOfficerPrefix(match?.marketingOfficer),
       lastPayDate: match?.lastPayDate || '',
       lastPaidAmount: match?.lastPaidAmount ?? 0,
       nplReason: match?.nplReason,
@@ -1079,9 +1091,9 @@ export function syncTrackedContractsWithAers(
       visitDate: todayISO,
       ppDate: '',
       handOverDate: '',
-      remark: 'Imported from Sheet2 RO Watchlist.',
-      remarkBy: roName || 'RO',
-      ro: roName,
+      remark: 'Imported from Sheet2 Watchlist.',
+      remarkBy: assignedOfficer || 'Officer',
+      ro: assignedOfficer,
       currentSituation: 'Active Follow-Up',
       mrp: mrpHit,
       locationUrl: '',
@@ -1142,7 +1154,6 @@ export function syncTrackedContractsWithAers(
       match.totalCollection > 0 ||
       match.lastPaidAmount > 0 ||
       (match.monthEndForecastDpd > 0 && match.monthEndForecastDpd < 80);
-    // Saved only when actual DPD < 91, NPL = 0, month-end 30th forecast < 91, and genuinely saved/paid
     const nowCleanOn30th =
       match.npl === 0 &&
       match.actualDpd < 91 &&
@@ -1201,11 +1212,19 @@ export function syncTrackedContractsWithAers(
         nextSituation = 'BROKEN P/P';
         brokenPpCount += 1;
       } else if (item.currentSituation === 'NPL SAVED') {
-        // Clear stale NPL SAVED tag if account slipped or no longer meets save criteria
         nextSituation = 'Active Follow-Up';
         nextNplSavedAmount = 0;
       }
     }
+
+    const nextOfficeType = match.officeType || item.officeType;
+    const nextRo = stripOfficerPrefix(match.recoveryOfficer || item.recoveryOfficer);
+    const nextMo = stripOfficerPrefix(match.marketingOfficer || item.marketingOfficer);
+    const dynamicOfficer = getOfficerByOfficeType({
+      officeType: nextOfficeType,
+      marketingOfficer: nextMo,
+      recoveryOfficer: nextRo,
+    });
 
     return {
       ...item,
@@ -1226,14 +1245,14 @@ export function syncTrackedContractsWithAers(
       actualDpd: match.actualDpd,
       monthEndForecastDpd: match.monthEndForecastDpd,
       minAmountToReverseNpl: match.minAmountToReverseNpl,
-      recoveryOfficer: match.recoveryOfficer || item.recoveryOfficer,
-      marketingOfficer: match.marketingOfficer || item.marketingOfficer,
-      ro: item.ro || match.recoveryOfficer,
+      recoveryOfficer: nextRo,
+      marketingOfficer: nextMo,
+      ro: dynamicOfficer !== 'Unassigned' ? dynamicOfficer : stripOfficerPrefix(item.ro),
       lastPayDate: match.lastPayDate,
       lastPaidAmount: match.lastPaidAmount,
       nplReason: match.nplReason,
       worstCaseProduct: match.worstCaseProduct,
-      officeType: match.officeType || item.officeType,
+      officeType: nextOfficeType,
       assignOfficerEfforts: match.assignOfficerEfforts,
       totalEfforts: match.totalEfforts,
       mrp: nextMrp,
@@ -1255,7 +1274,6 @@ export function syncTrackedContractsWithAers(
     isNplSavedAccount(c),
   ).length;
 
-  // Branch-wide totals across full uploaded AERS Master for monthly progress saving through Mar 2027
   let branchDebtor = 0;
   let branchNpl = 0;
   let branchDue = 0;
@@ -1327,7 +1345,6 @@ export function parseWhatsAppLocations(
     }
   });
 
-  // Split text into WhatsApp message blocks (lines starting with date/time or plain lines)
   const lines = rawText.split(/\r?\n/);
   const blocks: string[] = [];
   const waTimestampStart = /^(\[?\d{1,2}[/-]\d{1,2}[/-]\d{2,4},?\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?\]?)/i;
@@ -1338,12 +1355,10 @@ export function parseWhatsAppLocations(
     if (waTimestampStart.test(trimmed) || blocks.length === 0) {
       blocks.push(trimmed);
     } else {
-      // Attach continuation lines (like a URL on the next line) to previous message block
       blocks[blocks.length - 1] = `${blocks[blocks.length - 1]}\n${trimmed}`;
     }
   }
 
-  // Regex patterns for Sri Lankan Vehicle No & Map links / Coordinates
   const vehicleRegex =
     /\b(?:(?:WP|CP|SP|NP|EP|NW|NC|SG|UVA)\s+)?(?:[A-Z]{2,3}[-\s]?\d{4}|\d{2,3}[-\s]?\d{4})\b/gi;
   const mapUrlRegex =
@@ -1361,7 +1376,6 @@ export function parseWhatsAppLocations(
     const vehicleHits = block.match(vehicleRegex);
     if (!vehicleHits) continue;
 
-    // Look for map URL in current block first, then combined with immediate next line/block
     const urlMatch = block.match(mapUrlRegex) || combined.match(mapUrlRegex);
     const coordMatch = block.match(coordsRegex) || combined.match(coordsRegex);
 
@@ -1379,7 +1393,6 @@ export function parseWhatsAppLocations(
 
     for (const rawHit of vehicleHits) {
       const normalized = normalizeVehicleNo(rawHit);
-      // Avoid matching years like "2026" alone (already prevented by prefix requirement) or phone chunks
       if (normalized.length < 6) continue;
       if (seenVehicles.has(normalized)) continue;
       seenVehicles.add(normalized);
@@ -1472,7 +1485,7 @@ export function triggerDesktopNotifications(
       new Notification(title, { body, tag });
       sentCount += 1;
     } catch {
-      // Some embedded iframes disallow Notification constructor even if permission is granted
+      // Ignore
     }
   };
 
@@ -1561,7 +1574,10 @@ export function exportTrackedToExcel(
     CUS_NAME: c.cusName,
     MOBILE_NO: c.mobileNo,
     VEHICLE_NO: c.vehicleNo,
-    RO: c.ro || c.recoveryOfficer,
+    OFFICE_TYPE: c.officeType || '',
+    ASSIGNED_OFFICER: getOfficerByOfficeType(c),
+    RECOVERY_OFFICER: c.recoveryOfficer,
+    MARKETING_OFFICER: c.marketingOfficer,
     OP_AGE: c.opAge,
     CURRENT_AGE: c.currentAge,
     ACTUAL_DPD: c.actualDpd,
@@ -1726,7 +1742,7 @@ export function normalizeEvaluableFromTracked(
       cusName: c.cusName,
       vehicleNo: c.vehicleNo,
       officeType: (c.officeType || 'Unassigned Office').trim() || 'Unassigned Office',
-      officer: (c.ro || c.recoveryOfficer || 'Unassigned').trim() || 'Unassigned',
+      officer: getOfficerByOfficeType(c),
       opAge: c.opAge || 0,
       currentAge: c.currentAge || 0,
       actualDpd: c.actualDpd || 0,
@@ -1763,7 +1779,7 @@ export function normalizeEvaluableFromAers(
     cusName: r.cusName,
     vehicleNo: r.currentStock ? normalizeVehicleNo(r.currentStock) : '',
     officeType: (r.officeType || 'Unassigned Office').trim() || 'Unassigned Office',
-    officer: (r.recoveryOfficer || 'Unassigned').trim() || 'Unassigned',
+    officer: getOfficerByOfficeType(r),
     opAge: r.opAge || 0,
     currentAge: r.currentAge || 0,
     actualDpd: r.actualDpd || 0,
@@ -1795,7 +1811,7 @@ export function buildOpeningOfficerBaseline(
 ): OpeningOfficerBaseline {
   const byOfficer: OpeningOfficerBaseline['byOfficer'] = {};
   for (const r of records) {
-    const key = (r.recoveryOfficer || 'Unassigned').trim() || 'Unassigned';
+    const key = getOfficerByOfficeType(r);
     if (!byOfficer[key]) {
       byOfficer[key] = {
         openingCount: 0,
@@ -1926,7 +1942,6 @@ export function analyzeNextMonthBorderline(
     const curCapWithArrears =
       (item.capitalOutstanding || item.opCapitalOutstanding || 0) + capArrears;
 
-    // 1st-of-month Forecasted Borderline tracking (OP_AGE 2.01 - 2.99 & OP NPL = 0)
     if (isForecastedBorderAccount(item)) {
       forecastedBorderCount += 1;
       forecastedBorderAmount += opCapWithArrears;
@@ -1937,7 +1952,6 @@ export function analyzeNextMonthBorderline(
       }
     }
 
-    // Saved this month: started 1st at risk (Op Npl > 0 or OP_AGE 2.01-2.99) and kept < 91 DPD on 30th
     if (
       isNplSavedAccount({
         opNpl: item.opNpl,
@@ -1961,8 +1975,6 @@ export function analyzeNextMonthBorderline(
       }
     }
 
-    // Borderline identification (< 91 DPD & NPL = 0):
-    // Crossing 91 this month-end OR in 61-90 / >=80 forecast / currentAge 2.01-2.99 / BORDER NPL
     if (!isEvaluableBorderlineAccount(item)) continue;
 
     const crossesThisMonthEnd = item.monthEndForecastDpd >= 91;
@@ -2216,7 +2228,6 @@ export function computeOfficerOpeningClosing(
     }
   }
 
-  // If lightweight OpeningOfficerBaseline exists for full AERS scope, anchor opening totals if larger/valid
   if (openingBaseline && items.length > 0) {
     for (const [officerKey, base] of Object.entries(openingBaseline.byOfficer)) {
       const row = byOfficer.get(officerKey);
@@ -2311,14 +2322,12 @@ export function computeOfficeTypeBreakdown(
         ? item.minAmountToReverseNpl
         : item.currentMonthDue;
 
-    // Office totals
     officeEntry.summary.totalCount += 1;
     if (isActiveNpl) officeEntry.summary.activeNplCount += 1;
     officeEntry.summary.opNpl += item.opNpl;
     officeEntry.summary.closingNpl += item.npl;
     officeEntry.summary.closingDebtor += item.closingDebtor;
 
-    // RO nested totals
     roRow.totalCount += 1;
     if (isActiveNpl) roRow.activeNplCount += 1;
     roRow.opNpl += item.opNpl;
@@ -2432,32 +2441,38 @@ export function computeBmOfficerPerformance(
 ): BmOfficerPerformanceRow[] {
   const source =
     aersRecords.length > 0
-      ? aersRecords.map((r) => ({
-          officer:
-            (role === 'RO' ? r.recoveryOfficer : r.marketingOfficer)?.trim() ||
-            'Unassigned',
-          dueBudget: r.dueBudgetMonth || r.currentMonthDue || 0,
-          totalCollection: r.totalCollection || 0,
-          opNpl: r.opNpl || 0,
-          closingNpl: r.npl || 0,
-          closingDebtor: r.closingDebtor || 0,
-          opAge: r.opAge || 0,
-          currentAge: r.currentAge || 0,
-        }))
-      : trackedContracts.map((c) => ({
-          officer:
-            (role === 'RO'
-              ? c.ro || c.recoveryOfficer
-              : c.marketingOfficer
-            )?.trim() || 'Unassigned',
-          dueBudget: c.currentMonthDue || 0,
-          totalCollection: c.totalCollection || 0,
-          opNpl: c.opNpl || 0,
-          closingNpl: c.npl || 0,
-          closingDebtor: c.closingDebtor || 0,
-          opAge: c.opAge || 0,
-          currentAge: c.currentAge || 0,
-        }));
+      ? aersRecords
+          .filter((r) =>
+            role === 'MO'
+              ? isMarketingOfficeType(r.officeType)
+              : !isMarketingOfficeType(r.officeType),
+          )
+          .map((r) => ({
+            officer: getOfficerByOfficeType(r),
+            dueBudget: r.dueBudgetMonth || r.currentMonthDue || 0,
+            totalCollection: r.totalCollection || 0,
+            opNpl: r.opNpl || 0,
+            closingNpl: r.npl || 0,
+            closingDebtor: r.closingDebtor || 0,
+            opAge: r.opAge || 0,
+            currentAge: r.currentAge || 0,
+          }))
+      : trackedContracts
+          .filter((c) =>
+            role === 'MO'
+              ? isMarketingOfficeType(c.officeType)
+              : !isMarketingOfficeType(c.officeType),
+          )
+          .map((c) => ({
+            officer: getOfficerByOfficeType(c),
+            dueBudget: c.currentMonthDue || 0,
+            totalCollection: c.totalCollection || 0,
+            opNpl: c.opNpl || 0,
+            closingNpl: c.npl || 0,
+            closingDebtor: c.closingDebtor || 0,
+            opAge: c.opAge || 0,
+            currentAge: c.currentAge || 0,
+          }));
 
   const map = new Map<string, BmOfficerPerformanceRow>();
 
@@ -2498,7 +2513,6 @@ export function computeBmOfficerPerformance(
         ? Math.round((r.totalCollection / r.dueBudget) * 1000) / 10
         : 0;
     const netNplVariance = r.closingNpl - r.opNpl;
-    // Below 1 Age retention rate: current <= 1.00 relative to Opening <= 1.00 (or total portfolio if Op below-1 is 0)
     const denom = r.opBelowOneCount > 0 ? r.opBelowOneCount : r.totalCount;
     const belowOneRetentionPct =
       denom > 0 ? Math.round((r.belowOneCount / denom) * 1000) / 10 : 0;
@@ -2534,7 +2548,7 @@ export function computeOfficerEffortSummary(
       ? aersRecords.map((r) => {
           const mrp = mrpMap?.get(normalizeContractNo(r.contractNo));
           return {
-            ro: (r.recoveryOfficer || 'Unassigned').trim() || 'Unassigned',
+            ro: getOfficerByOfficeType(r),
             officeType:
               (r.officeType || 'Unassigned Office').trim() ||
               'Unassigned Office',
@@ -2554,8 +2568,7 @@ export function computeOfficerEffortSummary(
           };
         })
       : trackedContracts.map((c) => ({
-          ro:
-            (c.ro || c.recoveryOfficer || 'Unassigned').trim() || 'Unassigned',
+          ro: getOfficerByOfficeType(c),
           officeType:
             (c.officeType || 'Unassigned Office').trim() ||
             'Unassigned Office',
@@ -2639,7 +2652,3 @@ export function computeOfficerEffortSummary(
 
   return rows;
 }
-
-
-
-
