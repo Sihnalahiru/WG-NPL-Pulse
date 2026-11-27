@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   BarChart3,
@@ -7,6 +7,7 @@ import {
   Bot,
   Building2,
   CheckCircle2,
+  Cloud,
   Database,
   Flame,
   HardDriveDownload,
@@ -63,6 +64,7 @@ import {
   formatCompactRs,
   getDaysRemainingTo30th,
   getMonth30thLabel,
+  getOfficerByOfficeType,
   getTodayISO,
   isWorstCategory,
   normalizeContractNo,
@@ -76,6 +78,11 @@ import {
   triggerDesktopNotifications,
 } from './utils/recoveryEngine';
 import type { ParsedAersResult } from './utils/recoveryEngine';
+import {
+  fetchLiveCloudData,
+  getSavedGithubToken,
+  publishLiveCloudData,
+} from './utils/githubSync';
 
 const STORAGE_KEYS = {
   TRACKED: 'wg_v2_tracked_contracts',
@@ -145,7 +152,7 @@ export default function App() {
     'office_breakdown' | 'bm_analytics' | 'ai' | 'alerts'
   >('office_breakdown');
   const [settingsSubTab, setSettingsSubTab] = useState<'lookup' | 'backup'>('lookup');
-  const [mrpMap, setMrpMap] = useState<Map<string, MrpEnrichment>>(() => {
+  const [mrpMap, setMrpMap] = useState>(() => {
     const rawObj = readJsonStorage<Record<string, MrpEnrichment>>(
       STORAGE_KEYS.MRP_MAP,
       {},
@@ -156,10 +163,12 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterPreset>('all');
   const [animKey, setAnimKey] = useState(0);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
 
-  // Admin session token kept strictly in React JS memory (never localStorage/sessionStorage)
+  // Admin session token kept in React memory
   const [adminToken, setAdminToken] = useState<string | null>(null);
   const [adminModalOpen, setAdminModalOpen] = useState(false);
+  const isAdmin = Boolean(adminToken);
 
   // Modals
   const [contractModalState, setContractModalState] = useState<{
@@ -182,12 +191,96 @@ export default function App() {
 
   const startupNotifiedRef = useRef(false);
 
-  const showToast = (
-    title: string,
-    detail: string,
-    tone: 'info' | 'success' | 'error' = 'info',
-  ) => {
-    setToast({ id: Date.now(), title, detail, tone });
+  const showToast = useCallback(
+    (
+      title: string,
+      detail: string,
+      tone: 'info' | 'success' | 'error' = 'info',
+    ) => {
+      setToast({ id: Date.now(), title, detail, tone });
+    },
+    [],
+  );
+
+  // Pull shared live data from GitHub for ALL visitors so everyone sees the Admin's latest upload
+  const syncFromLiveCloud = useCallback(
+    async (silent = true) => {
+      setIsSyncingCloud(true);
+      try {
+        const cloud = await fetchLiveCloudData();
+        if (cloud && cloud.aersRecords) {
+          setAersRecords(cloud.aersRecords);
+          if (cloud.aersMeta) setAersMeta(cloud.aersMeta);
+          if (cloud.mrpMap) setMrpMap(new Map(Object.entries(cloud.mrpMap)));
+          if (cloud.openingBaseline) setOpeningBaseline(cloud.openingBaseline);
+          if (Array.isArray(cloud.trackedContracts)) {
+            setTrackedContracts(cloud.trackedContracts);
+          }
+          if (Array.isArray(cloud.monthlySnapshots)) {
+            setMonthlySnapshots(cloud.monthlySnapshots);
+          }
+          setAnimKey((k) => k + 1);
+          if (!silent) {
+            showToast(
+              'Live Data Refreshed',
+              `Loaded ${cloud.aersRecords.length.toLocaleString()} accounts (${cloud.aersMeta?.printedDateTime || cloud.updatedAt}).`,
+              'success',
+            );
+          }
+        } else if (!silent) {
+          showToast(
+            'No Cloud Snapshot Yet',
+            'Admin has not published a live snapshot yet.',
+            'info',
+          );
+        }
+      } catch {
+        if (!silent) {
+          showToast(
+            'Sync Failed',
+            'Could not fetch live data from GitHub.',
+            'error',
+          );
+        }
+      } finally {
+        setIsSyncingCloud(false);
+      }
+    },
+    [showToast],
+  );
+
+  useEffect(() => {
+    syncFromLiveCloud(true);
+  }, [syncFromLiveCloud]);
+
+  // Helper to push Admin updates live to GitHub so all users see them immediately
+  const pushToLiveCloudIfConfigured = async (override?: {
+    aersRecords?: AersRecord[];
+    aersMeta?: AersMetadata | null;
+    mrpMap?: Map<string, MrpEnrichment>;
+    openingBaseline?: OpeningOfficerBaseline | null;
+    trackedContracts?: TrackedContract[];
+    monthlySnapshots?: MonthlySnapshot[];
+  }) => {
+    const ghToken = getSavedGithubToken();
+    if (!ghToken) return false;
+
+    const payload = {
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'Admin',
+      aersRecords: override?.aersRecords ?? aersRecords,
+      aersMeta: override?.aersMeta !== undefined ? override.aersMeta : aersMeta,
+      mrpMap: Object.fromEntries(override?.mrpMap ?? mrpMap),
+      openingBaseline:
+        override?.openingBaseline !== undefined
+          ? override.openingBaseline
+          : openingBaseline,
+      trackedContracts: override?.trackedContracts ?? trackedContracts,
+      monthlySnapshots: override?.monthlySnapshots ?? monthlySnapshots,
+    };
+
+    await publishLiveCloudData(payload, ghToken);
+    return true;
   };
 
   useEffect(() => {
@@ -202,7 +295,7 @@ export default function App() {
     localStorage.setItem(STORAGE_KEYS.THEME, isDark ? 'dark' : 'light');
   }, [isDark]);
 
-  // Remove legacy duplicate storage keys so storage never piles up
+  // Remove legacy duplicate storage keys
   useEffect(() => {
     try {
       localStorage.removeItem('wg_v2_opening_master');
@@ -214,11 +307,11 @@ export default function App() {
         }
       }
     } catch {
-      // Ignore storage access restrictions
+      // Ignore
     }
   }, []);
 
-  // Persist domain state to localStorage (single-copy replace-on-upload)
+  // Persist domain state to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -226,7 +319,7 @@ export default function App() {
         JSON.stringify(trackedContracts),
       );
     } catch {
-      // Ignore quota errors
+      // Ignore
     }
   }, [trackedContracts]);
 
@@ -258,7 +351,7 @@ export default function App() {
         );
       }
     } catch {
-      // Ignore quota errors if Excel is huge; kept cleanly in React memory
+      // Ignore
     }
   }, [aersRecords, aersMeta, openingBaseline, mrpMap]);
 
@@ -269,7 +362,7 @@ export default function App() {
         JSON.stringify(monthlySnapshots),
       );
     } catch {
-      // Ignore quota errors
+      // Ignore
     }
   }, [monthlySnapshots]);
 
@@ -280,11 +373,11 @@ export default function App() {
         JSON.stringify(notifPrefs),
       );
     } catch {
-      // Ignore quota errors
+      // Ignore
     }
   }, [notifPrefs]);
 
-  // Lookup indices & unified strategy metrics (updates immediately on AERS upload/paste)
+  // Lookup indices & unified strategy metrics
   const aersMap = useMemo(() => {
     const map = new Map<string, AersRecord>();
     aersRecords.forEach((r) => {
@@ -337,7 +430,6 @@ export default function App() {
     alertDigest.dpd91Danger.length +
     alertDigest.pendingHandOver.length;
 
-  // Startup Notification request + hourly check
   useEffect(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) return;
 
@@ -453,7 +545,17 @@ export default function App() {
     }
   };
 
-  const applyParsedAersResult = (parsed: ParsedAersResult) => {
+  const applyParsedAersResult = async (parsed: ParsedAersResult) => {
+    if (!isAdmin) {
+      setAdminModalOpen(true);
+      showToast(
+        'Admin Login Required',
+        'Only Admin can upload and update AERS reports for everyone.',
+        'error',
+      );
+      return;
+    }
+
     const nextMap = new Map<string, AersRecord>();
     parsed.records.forEach((r) => {
       nextMap.set(normalizeContractNo(r.contractNo), r);
@@ -474,65 +576,80 @@ export default function App() {
       },
     );
 
-    if (!openingBaseline) {
-      setOpeningBaseline(
-        buildOpeningOfficerBaseline(
-          parsed.records,
-          parsed.metadata.printedDateTime,
-        ),
+    // Always replace openingBaseline with exact Excel ALL OFFICERS table or fresh AERS opening totals
+    const nextBaseline =
+      parsed.excelOfficerOpeningBaseline ??
+      buildOpeningOfficerBaseline(
+        parsed.records,
+        parsed.metadata.printedDateTime,
       );
-    }
+    setOpeningBaseline(nextBaseline);
 
-    // Track excluded regular/performing accounts in memory for manual entry validation
     setRegularContractNos(new Set(parsed.excludedRegularContractNos ?? []));
-
-    // Replace previous daily AERS master completely rather than piling up copies
     setAersRecords(parsed.records);
     setAersMeta(parsed.metadata);
     setTrackedContracts(syncResult.updatedContracts);
     setAnimKey((k) => k + 1);
 
-    // Upsert snapshot by snapshotDate so same-day uploads update cleanly while each month's progress (through Mar 2027) stays preserved
-    setMonthlySnapshots((prev) => {
-      const idx = prev.findIndex(
-        (s) => s.snapshotDate === syncResult.snapshot.snapshotDate,
-      );
-      let next: MonthlySnapshot[];
-      if (idx >= 0) {
-        next = [...prev];
-        next[idx] = { ...syncResult.snapshot, id: next[idx].id };
-      } else {
-        next = [...prev, syncResult.snapshot];
+    const idx = monthlySnapshots.findIndex(
+      (s) => s.snapshotDate === syncResult.snapshot.snapshotDate,
+    );
+    let nextSnapshots: MonthlySnapshot[];
+    if (idx >= 0) {
+      nextSnapshots = [...monthlySnapshots];
+      nextSnapshots[idx] = { ...syncResult.snapshot, id: nextSnapshots[idx].id };
+    } else {
+      nextSnapshots = [...monthlySnapshots, syncResult.snapshot];
+    }
+    nextSnapshots.sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+    setMonthlySnapshots(nextSnapshots);
+
+    // Auto-publish live to GitHub so all users see the updated data immediately
+    let cloudNote = ' · Saved locally (Add GitHub Token in Admin to publish live to everyone)';
+    try {
+      const published = await pushToLiveCloudIfConfigured({
+        aersRecords: parsed.records,
+        aersMeta: parsed.metadata,
+        mrpMap: effectiveMrpMap,
+        openingBaseline: nextBaseline,
+        trackedContracts: syncResult.updatedContracts,
+        monthlySnapshots: nextSnapshots,
+      });
+      if (published) {
+        cloudNote = ' · Published LIVE to GitHub for all users!';
       }
-      return next.sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
-    });
+    } catch (err) {
+      cloudNote = ` · Cloud sync error: ${err instanceof Error ? err.message : 'Failed'}`;
+    }
 
     const excludedCount = parsed.excludedRegularContractNos?.length ?? 0;
     const excludedNote =
       excludedCount > 0
         ? ` · ${excludedCount.toLocaleString()} regular excluded`
         : '';
-    const multiSheetNote = parsed.isMultiSheetWorkbook
-      ? ` · Sheet2 imported ${syncResult.importedFromSheet2Count} NPL/Borderline${
-          syncResult.skippedRegularSheet2Count > 0
-            ? ` (${syncResult.skippedRegularSheet2Count} regular skipped)`
-            : ''
-        } · MRP enriched ${syncResult.mrpEnrichedCount}`
-      : '';
 
     showToast(
       `Workbook Replaced & Auto-Synced (${parsed.records.length.toLocaleString()} NPL/Borderline)`,
-      `Synced ${syncResult.syncedCount} tracked${excludedNote}${multiSheetNote} · ${syncResult.newlySavedCount} saved from NPL · Snapshot ${parsed.metadata.printedDateTime}.`,
+      `Synced ${syncResult.syncedCount} tracked${excludedNote}${cloudNote}`,
       'success',
     );
   };
 
-  // Upload & Auto-Sync AERS Excel/CSV
+  // Upload & Auto-Sync AERS Excel/CSV (Admin Only)
   const handleUploadAersFile = async (file: File) => {
+    if (!isAdmin) {
+      setAdminModalOpen(true);
+      showToast(
+        'Admin Login Required',
+        'Please unlock Admin mode first before uploading AERS files.',
+        'error',
+      );
+      return;
+    }
     try {
       const buffer = await file.arrayBuffer();
       const parsed = parseAersWorkbook(buffer, file.name);
-      applyParsedAersResult(parsed);
+      await applyParsedAersResult(parsed);
     } catch (err) {
       const msg =
         err instanceof Error
@@ -542,14 +659,17 @@ export default function App() {
     }
   };
 
-  // Paste & Auto-Sync Daily AERS Evaluation from Excel
-  const handlePasteAersText = (rawText: string) => {
+  const handlePasteAersText = async (rawText: string) => {
+    if (!isAdmin) {
+      setAdminModalOpen(true);
+      return;
+    }
     try {
       const parsed = parseAersPastedText(
         rawText,
         `Daily Paste (${getTodayISO()})`,
       );
-      applyParsedAersResult(parsed);
+      await applyParsedAersResult(parsed);
     } catch (err) {
       const msg =
         err instanceof Error
@@ -581,15 +701,18 @@ export default function App() {
           normalizeContractNo(c.contractNo) ===
           normalizeContractNo(contract.contractNo),
       );
-      if (exists) {
-        return prev.map((c) =>
-          normalizeContractNo(c.contractNo) ===
-          normalizeContractNo(contract.contractNo)
-            ? contract
-            : c,
-        );
+      const next = exists
+        ? prev.map((c) =>
+            normalizeContractNo(c.contractNo) ===
+            normalizeContractNo(contract.contractNo)
+              ? contract
+              : c,
+          )
+        : [contract, ...prev];
+      if (isAdmin) {
+        pushToLiveCloudIfConfigured({ trackedContracts: next }).catch(() => {});
       }
-      return [contract, ...prev];
+      return next;
     });
     showToast(
       'Watchlist Updated',
@@ -599,7 +722,13 @@ export default function App() {
   };
 
   const handleBulkAddContracts = (contractsToAdd: TrackedContract[]) => {
-    setTrackedContracts((prev) => [...contractsToAdd, ...prev]);
+    setTrackedContracts((prev) => {
+      const next = [...contractsToAdd, ...prev];
+      if (isAdmin) {
+        pushToLiveCloudIfConfigured({ trackedContracts: next }).catch(() => {});
+      }
+      return next;
+    });
     showToast(
       'Bulk Import Complete',
       `Added ${contractsToAdd.length} contract${contractsToAdd.length === 1 ? '' : 's'} to active Watchlist.`,
@@ -610,6 +739,7 @@ export default function App() {
   const handleAddFromMaster = (record: AersRecord) => {
     if (trackedContractNos.has(normalizeContractNo(record.contractNo))) return;
     const today = getTodayISO();
+    const assignedOfficer = getOfficerByOfficeType(record);
     const newTracked: TrackedContract = {
       contractNo: record.contractNo,
       cusName: record.cusName,
@@ -646,8 +776,8 @@ export default function App() {
       ppDate: '',
       handOverDate: '',
       remark: 'Added from AERS Master Lookup.',
-      remarkBy: record.recoveryOfficer || 'RO',
-      ro: record.recoveryOfficer,
+      remarkBy: assignedOfficer || 'Officer',
+      ro: assignedOfficer,
       currentSituation: 'Active Follow-Up',
       mrp: mrpMap.get(normalizeContractNo(record.contractNo)),
       locationUrl: '',
@@ -656,7 +786,13 @@ export default function App() {
       lastSyncedAt: aersMeta?.printedDateTime,
       visitHistory: [],
     };
-    setTrackedContracts((prev) => [newTracked, ...prev]);
+    setTrackedContracts((prev) => {
+      const next = [newTracked, ...prev];
+      if (isAdmin) {
+        pushToLiveCloudIfConfigured({ trackedContracts: next }).catch(() => {});
+      }
+      return next;
+    });
     showToast(
       'Added to Watchlist',
       `${record.contractNo} (${record.cusName}) is now tracked.`,
@@ -665,12 +801,16 @@ export default function App() {
   };
 
   const handleRemoveContract = (contractNo: string) => {
-    setTrackedContracts((prev) =>
-      prev.filter(
+    setTrackedContracts((prev) => {
+      const next = prev.filter(
         (c) =>
           normalizeContractNo(c.contractNo) !== normalizeContractNo(contractNo),
-      ),
-    );
+      );
+      if (isAdmin) {
+        pushToLiveCloudIfConfigured({ trackedContracts: next }).catch(() => {});
+      }
+      return next;
+    });
     showToast(
       'Removed from Watchlist',
       `${contractNo} removed from active tracking (remains in AERS Lookup).`,
@@ -686,8 +826,8 @@ export default function App() {
       }
     });
 
-    setTrackedContracts((prev) =>
-      prev.map((c) => {
+    setTrackedContracts((prev) => {
+      const next = prev.map((c) => {
         const hit = byContract.get(normalizeContractNo(c.contractNo));
         if (!hit) return c;
         return {
@@ -696,8 +836,12 @@ export default function App() {
           locationUpdatedAt: hit.timestampText,
           locationText: hit.locationText,
         };
-      }),
-    );
+      });
+      if (isAdmin) {
+        pushToLiveCloudIfConfigured({ trackedContracts: next }).catch(() => {});
+      }
+      return next;
+    });
 
     showToast(
       'WhatsApp Locations Synced',
@@ -706,7 +850,6 @@ export default function App() {
     );
   };
 
-  // Backup Export / Restore / Admin-Protected Total App Reset
   const handleExportBackup = () => {
     const payload: BackupPayload = {
       version: 3,
@@ -769,24 +912,22 @@ export default function App() {
     }
   };
 
+  const handleForcePublishNow = async () => {
+    const ok = await pushToLiveCloudIfConfigured();
+    if (!ok) {
+      throw new Error('Please paste and save your GitHub Personal Access Token first.');
+    }
+    showToast(
+      'Published Live to Everyone',
+      `All ${aersRecords.length.toLocaleString()} accounts & ${trackedContracts.length} watchlist contracts are now live for all users.`,
+      'success',
+    );
+  };
+
   const handleAuthorizedReset = async () => {
     if (!adminToken) {
       throw new Error('Admin login is required to reset the application.');
     }
-    const res = await fetch('/api/admin/authorize-reset', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${adminToken}`,
-      },
-    });
-    const data = (await res.json()) as { authorized?: boolean; error?: string };
-    if (!res.ok || !data.authorized) {
-      if (res.status === 401) {
-        setAdminToken(null);
-      }
-      throw new Error(data.error || 'Admin reset authorization rejected.');
-    }
-
     setAersRecords([]);
     setAersMeta(null);
     setMrpMap(new Map());
@@ -800,6 +941,16 @@ export default function App() {
     localStorage.removeItem(STORAGE_KEYS.OPENING_BASELINE);
     localStorage.removeItem(STORAGE_KEYS.TRACKED);
     localStorage.removeItem(STORAGE_KEYS.SNAPSHOTS);
+
+    await pushToLiveCloudIfConfigured({
+      aersRecords: [],
+      aersMeta: null,
+      mrpMap: new Map(),
+      openingBaseline: null,
+      trackedContracts: [],
+      monthlySnapshots: [],
+    }).catch(() => {});
+
     showToast(
       'Total App Reset Complete',
       'Authorized by Admin. Watchlist, AERS Lookup, Opening Baseline, and Monthly Snapshots have been cleared.',
@@ -874,13 +1025,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
-      {/* Premium Sticky Glass Header with WG PULSE Luxury Branding & Glass Nav */}
+      {/* Sticky Header */}
       <header className="sticky top-0 z-30 h-16 bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border-b border-slate-200/80 dark:border-slate-800/80 px-4 sm:px-6 flex items-center justify-between gap-4 shrink-0 shadow-xs">
-        {/* Brand Zone: Executive WG PULSE Wordmark with Telemetry Beacon */}
         <div className="flex items-center gap-3.5 min-w-0">
           <div className="relative flex items-center justify-center p-2 rounded-2xl bg-gradient-to-br from-emerald-500 via-teal-600 to-slate-900 shadow-md shadow-emerald-950/20 border border-emerald-400/30 shrink-0">
             <PulseLogoMark className="w-6 h-6 text-white drop-shadow" />
-            {/* Live Telemetry Blinking Beacon */}
             <span className="absolute -top-1 -right-1 flex h-3 w-3">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500 border-2 border-white dark:border-slate-900" />
@@ -901,12 +1050,12 @@ export default function App() {
               </span>
             </div>
             <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 tracking-wide uppercase truncate block">
-              Leasing &amp; Finance Recovery Control · Live Telemetry
+              Leasing &amp; Finance Recovery Control · {isAdmin ? 'Admin Mode' : 'Live View-Only'}
             </span>
           </div>
         </div>
 
-        {/* Center Zone: Executive Glass Navigation Menu (Desktop/Tablet) */}
+        {/* Center Navigation */}
         <nav
           aria-label="Executive Glass Header Navigation"
           className="hidden xl:flex items-center gap-1 p-1 bg-slate-100/90 dark:bg-slate-950/80 backdrop-blur-2xl border border-slate-200/90 dark:border-slate-800/90 rounded-2xl shadow-xs shrink-0"
@@ -978,51 +1127,66 @@ export default function App() {
           })}
         </nav>
 
-        {/* Right Zone: Primary Quick Actions */}
+        {/* Right Zone: Admin-Only Upload/Add + Live Refresh */}
         <div className="flex items-center gap-2 shrink-0">
-          <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer transition-colors whitespace-nowrap shrink-0 shadow-xs">
-            <Upload className="w-3.5 h-3.5 text-blue-600" />
-            <span className="hidden md:inline">Upload AERS</span>
-            <span className="md:hidden">AERS</span>
-            <input
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleUploadAersFile(file);
-                e.target.value = '';
-              }}
-            />
-          </label>
-
           <button
             type="button"
-            onClick={() =>
-              setContractModalState({
-                isOpen: true,
-                mode: 'add',
-                contract: null,
-              })
-            }
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:from-emerald-700 hover:to-teal-700 shadow-sm transition-all whitespace-nowrap shrink-0"
+            onClick={() => syncFromLiveCloud(false)}
+            disabled={isSyncingCloud}
+            title="Fetch latest Admin-published data"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 shadow-xs disabled:opacity-50"
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Add Contract</span>
-            <span className="sm:hidden">Add</span>
+            <Cloud className={`w-3.5 h-3.5 text-emerald-600 ${isSyncingCloud ? 'animate-pulse' : ''}`} />
+            <span className="hidden md:inline">{isSyncingCloud ? 'Syncing...' : 'Refresh Live'}</span>
           </button>
+
+          {isAdmin && (
+            <>
+              <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer transition-colors whitespace-nowrap shrink-0 shadow-xs">
+                <Upload className="w-3.5 h-3.5 text-blue-600" />
+                <span className="hidden md:inline">Upload AERS</span>
+                <span className="md:hidden">AERS</span>
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleUploadAersFile(file);
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setContractModalState({
+                    isOpen: true,
+                    mode: 'add',
+                    contract: null,
+                  })
+                }
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:from-emerald-700 hover:to-teal-700 shadow-sm transition-all whitespace-nowrap shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Add Contract</span>
+                <span className="sm:hidden">Add</span>
+              </button>
+            </>
+          )}
 
           <button
             type="button"
             onClick={() => setAdminModalOpen(true)}
             aria-label="Admin login and reset controls"
             className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
-              adminToken
+              isAdmin
                 ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
                 : 'border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
             }`}
           >
-            {adminToken ? (
+            {isAdmin ? (
               <>
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
                 <span className="hidden sm:inline">Admin Active</span>
@@ -1030,19 +1194,9 @@ export default function App() {
             ) : (
               <>
                 <Lock className="w-3.5 h-3.5 text-slate-500" />
-                <span className="hidden sm:inline">Admin</span>
+                <span className="hidden sm:inline">Admin Login</span>
               </>
             )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setAnimKey((k) => k + 1)}
-            title="Replay all dashboard and chart animations"
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 shadow-xs"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-indigo-500" />
-            <span className="hidden 2xl:inline">Replay Animations</span>
           </button>
 
           <button
@@ -1066,7 +1220,7 @@ export default function App() {
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-600 dark:text-slate-400 tabular-nums">
             <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-400">
               <RefreshCw className="w-3 h-3 shrink-0" />
-              Auto-Sync Active
+              {isAdmin ? 'Admin Live Publish Enabled' : 'Live View Mode (Admin Controlled)'}
             </span>
             <span aria-hidden="true">·</span>
             <span>
@@ -1100,14 +1254,16 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setWaModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              Sync WhatsApp
-            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setWaModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                Sync WhatsApp
+              </button>
+            )}
 
             <button
               type="button"
@@ -1147,7 +1303,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Dismissible Action Feedback Toast */}
+      {/* Toast */}
       {toast && (
         <div className="px-4 sm:px-6 pt-4 max-w-[1600px] w-full mx-auto">
           <div
@@ -1190,12 +1346,10 @@ export default function App() {
         >
           {activeNav === 'overview' && (
             <>
-              {/* Executive Strategy Dashboard Banner - Donezo Style Premium Elements */}
               <section
                 aria-label="Recovery Strategy Summary"
                 className="bg-gradient-to-br from-emerald-950 via-slate-900 to-slate-950 text-white border border-emerald-800/40 rounded-3xl p-6 sm:p-7 shadow-xl shadow-slate-950/25 relative overflow-hidden backdrop-blur-xl"
               >
-                {/* Continuous Ambient Energy Wave along Bottom Edge */}
                 <div className="absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-600 animate-pulse opacity-75" />
 
                 <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 relative z-10">
@@ -1215,7 +1369,6 @@ export default function App() {
                       Strict NPL &amp; Borderline isolation separating 91+ DPD Classified, Opening NPL, and Critical 76–90 DPD Borderline accounts while excluding regular performing contracts.
                     </p>
 
-                    {/* Executive Metric Cards Strip */}
                     <div className="grid grid-cols-3 gap-3 pt-1 tabular-nums max-w-xl">
                       <div className="p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md">
                         <div className="text-[11px] font-medium text-slate-400">
@@ -1258,37 +1411,50 @@ export default function App() {
                       </button>
                     </div>
 
-                    {/* Executive Action Bar */}
+                    {/* Action Bar: Admin-Only Upload/Add + Public Navigation */}
                     <div className="flex flex-wrap items-center gap-2.5 pt-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setContractModalState({
-                            isOpen: true,
-                            mode: 'add',
-                            contract: null,
-                          })
-                        }
-                        className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-md transition-all whitespace-nowrap"
-                      >
-                        <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                        + Add Contract
-                      </button>
+                      {isAdmin ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setContractModalState({
+                                isOpen: true,
+                                mode: 'add',
+                                contract: null,
+                              })
+                            }
+                            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-md transition-all whitespace-nowrap"
+                          >
+                            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                            + Add Contract
+                          </button>
 
-                      <label className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white cursor-pointer transition-all whitespace-nowrap">
-                        <Upload className="w-3.5 h-3.5 text-emerald-400" />
-                        Upload Daily AERS
-                        <input
-                          type="file"
-                          accept=".xlsx,.xls,.csv"
-                          className="hidden"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) handleUploadAersFile(file);
-                            e.target.value = '';
-                          }}
-                        />
-                      </label>
+                          <label className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white cursor-pointer transition-all whitespace-nowrap">
+                            <Upload className="w-3.5 h-3.5 text-emerald-400" />
+                            Upload Daily AERS
+                            <input
+                              type="file"
+                              accept=".xlsx,.xls,.csv"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) handleUploadAersFile(file);
+                                e.target.value = '';
+                              }}
+                            />
+                          </label>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setAdminModalOpen(true)}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-emerald-300 transition-all whitespace-nowrap"
+                        >
+                          <Lock className="w-3.5 h-3.5" />
+                          Admin Login to Upload Data
+                        </button>
+                      )}
 
                       <button
                         type="button"
@@ -1333,7 +1499,6 @@ export default function App() {
                 animKey={animKey}
               />
 
-              {/* Trends & Daily Age Evaluation Sections Integrated Directly on Main Dashboard */}
               <TrendsEvaluationPanel
                 trackedContracts={trackedContracts}
                 aersRecords={aersRecords}
@@ -1449,7 +1614,7 @@ export default function App() {
                     }`}
                   >
                     <Building2 className="w-3.5 h-3.5" />
-                    Office Type → RO Breakdown
+                    Office Type → Officer Breakdown
                   </button>
                   <button
                     type="button"
@@ -1515,7 +1680,7 @@ export default function App() {
                 <OfficeTypeBreakdownPanel
                   trackedContracts={trackedContracts}
                   aersRecords={aersRecords}
-                  title="Office Type -> RO Breakdown (NPL & Borderline)"
+                  title="Office Type -> Officer Strategy Breakdown (NPL & Borderline)"
                 />
               )}
 
@@ -1620,7 +1785,7 @@ export default function App() {
                   trackedCount={trackedContracts.length}
                   snapshotsCount={monthlySnapshots.length}
                   aersMeta={aersMeta}
-                  isAdminAuthenticated={Boolean(adminToken)}
+                  isAdminAuthenticated={isAdmin}
                   onOpenAdminModal={() => setAdminModalOpen(true)}
                   onExportBackup={handleExportBackup}
                   onRestoreBackup={handleRestoreBackup}
@@ -1631,7 +1796,7 @@ export default function App() {
         </motion.div>
       </main>
 
-      {/* Premium Footer (with bottom clearance for the floating glass dock) */}
+      {/* Footer */}
       <footer className="mt-8 pb-28 px-4 sm:px-6 border-t border-slate-200/80 dark:border-slate-800/80 bg-white/60 dark:bg-slate-900/50 backdrop-blur-md">
         <div className="max-w-[1600px] mx-auto py-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 text-xs">
           <div className="flex items-center gap-3">
@@ -1641,7 +1806,7 @@ export default function App() {
                 WG Pulse · Leasing &amp; Finance Recovery Control
               </div>
               <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                Single-copy daily AERS sync · Office Type → RO Strategy · AI Strategist &amp; Google Maps Grounding
+                Admin Live Cloud Sync · Office Type → MO/RO Strategy · AI Strategist &amp; Google Maps
               </div>
             </div>
           </div>
@@ -1676,7 +1841,7 @@ export default function App() {
               onClick={() => setAdminModalOpen(true)}
               className="inline-flex items-center gap-1 font-medium text-blue-600 dark:text-blue-400 hover:underline"
             >
-              {adminToken ? (
+              {isAdmin ? (
                 <>
                   <ShieldCheck className="w-3.5 h-3.5" />
                   Admin Unlocked
@@ -1684,7 +1849,7 @@ export default function App() {
               ) : (
                 <>
                   <Lock className="w-3.5 h-3.5" />
-                  Admin Reset Gateway
+                  Admin Gateway
                 </>
               )}
             </button>
@@ -1692,7 +1857,7 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Transparent Floating Glass Bottom Menu Dock */}
+      {/* Bottom Floating Glass Menu Dock */}
       <nav
         aria-label="Primary Floating Glass Bottom Menu"
         className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 max-w-[95vw] overflow-x-auto bg-white/65 dark:bg-slate-900/65 backdrop-blur-2xl border border-white/60 dark:border-slate-700/60 shadow-[0_12px_40px_-10px_rgba(15,23,42,0.28)] rounded-2xl p-1.5"
@@ -1786,13 +1951,13 @@ export default function App() {
       {/* Modals */}
       <AdminLoginModal
         isOpen={adminModalOpen}
-        isAdminAuthenticated={Boolean(adminToken)}
+        isAdminAuthenticated={isAdmin}
         onClose={() => setAdminModalOpen(false)}
         onLoginSuccess={(token) => {
           setAdminToken(token);
           showToast(
-            'Admin Session Unlocked',
-            'Total App Reset control is now unlocked for this session.',
+            'Admin Mode Unlocked',
+            'You can now upload AERS reports, edit watchlist contracts, and publish live updates to everyone.',
             'success',
           );
         }}
@@ -1800,11 +1965,12 @@ export default function App() {
           setAdminToken(null);
           showToast(
             'Admin Session Locked',
-            'Admin reset privilege has been locked.',
+            'Switched back to View-Only mode.',
             'info',
           );
         }}
         onConfirmReset={handleAuthorizedReset}
+        onForcePublishNow={handleForcePublishNow}
       />
 
       <ContractModal
