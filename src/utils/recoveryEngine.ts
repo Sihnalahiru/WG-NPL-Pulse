@@ -86,7 +86,12 @@ export function stripOfficerPrefix(name?: string): string {
 
 export function isMarketingOfficeType(officeType?: string): boolean {
   const ot = (officeType || '').trim().toUpperCase();
-  return ot === 'MO' || ot.startsWith('MO ') || ot.includes('MARKETING');
+  return (
+    ot === 'MO' ||
+    ot.startsWith('MO-') ||
+    ot.startsWith('MO ') ||
+    ot.includes('MARKETING')
+  );
 }
 
 export function getOfficerByOfficeType(rec: {
@@ -130,15 +135,14 @@ export function formatCurrencyRs(amount: number): string {
   })}`;
 }
 
+// Always show exact comma-separated amount (e.g. Rs. 310,000) across the entire app instead of K/M abbreviations
 export function formatCompactRs(amount: number): string {
   const safe = Number.isFinite(amount) ? amount : 0;
-  if (Math.abs(safe) >= 1_000_000) {
-    return `Rs. ${(safe / 1_000_000).toFixed(2)}M`;
-  }
-  if (Math.abs(safe) >= 1_000) {
-    return `Rs. ${(safe / 1_000).toFixed(1)}K`;
-  }
-  return `Rs. ${safe.toFixed(0)}`;
+  const hasDecimals = Math.abs(safe % 1) >= 0.005;
+  return `Rs. ${safe.toLocaleString('en-LK', {
+    minimumFractionDigits: hasDecimals ? 2 : 0,
+    maximumFractionDigits: hasDecimals ? 2 : 0,
+  })}`;
 }
 
 export function getDaysRemainingTo30th(referenceDate = new Date()): number {
@@ -326,6 +330,7 @@ export function isEligibleNplOrBorderline(
     opNpl: number;
     actualDpd: number;
     opAge: number;
+    currentAge?: number;
     monthEndForecastDpd: number;
     mrp?: MrpEnrichment;
   },
@@ -334,10 +339,11 @@ export function isEligibleNplOrBorderline(
   const mrp = mrpOverride ?? rec.mrp;
   if (
     (rec.opAge || 0) < 2.0 &&
+    (rec.currentAge || 0) < 2.0 &&
     (rec.npl || 0) === 0 &&
     (rec.opNpl || 0) === 0 &&
     (rec.monthEndForecastDpd || 0) < 80 &&
-    (rec.actualDpd || 0) < 91 &&
+    (rec.actualDpd || 0) < 61 &&
     !mrp?.borderNpl
   ) {
     return false;
@@ -345,10 +351,11 @@ export function isEligibleNplOrBorderline(
 
   return (
     (rec.npl || 0) > 0 ||
-    (rec.actualDpd || 0) >= 91 ||
+    (rec.actualDpd || 0) >= 61 ||
     (rec.opAge || 0) >= 3.0 ||
     (rec.opNpl || 0) > 0 ||
     (rec.opAge || 0) >= 2.01 ||
+    (rec.currentAge || 0) >= 2.01 ||
     (rec.monthEndForecastDpd || 0) >= 80 ||
     Boolean(mrp?.borderNpl)
   );
@@ -417,6 +424,10 @@ function parseNumeric(val: unknown): number {
   if (typeof val === 'string') {
     const cleaned = val.replace(/,/g, '').replace(/Rs\.?/gi, '').trim();
     if (!cleaned || cleaned === '-') return 0;
+    if (/^\(.*\)$/.test(cleaned)) {
+      const neg = Number(cleaned.slice(1, -1));
+      return Number.isFinite(neg) ? -neg : 0;
+    }
     const n = Number(cleaned);
     return Number.isFinite(n) ? n : 0;
   }
@@ -1051,7 +1062,6 @@ export function syncTrackedContractsWithAers(
     existingKeys.add(key);
     importedFromSheet2Count += 1;
 
-    // Enforce Office Type MO -> Marketing Officer, RO -> Recovery Officer
     const assignedOfficer = match
       ? getOfficerByOfficeType(match)
       : stripOfficerPrefix(row.ro);
