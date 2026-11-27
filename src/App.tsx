@@ -95,13 +95,42 @@ const STORAGE_KEYS = {
   THEME: 'wg_v2_theme',
 };
 
-function readJsonStorage<T>(key: string, fallback: T): T {
+function readArrayStorage<T>(key: string): T[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readObjectStorage<T extends object>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
-    return JSON.parse(raw) as T;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as T;
+    }
+    return fallback;
   } catch {
     return fallback;
+  }
+}
+
+function readNullableObjectStorage<T extends object>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as T;
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
@@ -114,33 +143,36 @@ interface ToastBanner {
 
 export default function App() {
   const [isDark, setIsDark] = useState<boolean>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.THEME);
-    if (saved === 'dark') return true;
-    if (saved === 'light') return false;
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.THEME);
+      if (saved === 'dark') return true;
+      if (saved === 'light') return false;
+    } catch {
+      // Ignore
+    }
     return false;
   });
 
   const [aersRecords, setAersRecords] = useState<AersRecord[]>(() =>
-    readJsonStorage<AersRecord[]>(STORAGE_KEYS.AERS_MASTER, []),
+    readArrayStorage<AersRecord>(STORAGE_KEYS.AERS_MASTER),
   );
   const [aersMeta, setAersMeta] = useState<AersMetadata | null>(() =>
-    readJsonStorage<AersMetadata | null>(STORAGE_KEYS.AERS_META, null),
+    readNullableObjectStorage<AersMetadata>(STORAGE_KEYS.AERS_META),
   );
   const [openingBaseline, setOpeningBaseline] =
     useState<OpeningOfficerBaseline | null>(() =>
-      readJsonStorage<OpeningOfficerBaseline | null>(
+      readNullableObjectStorage<OpeningOfficerBaseline>(
         STORAGE_KEYS.OPENING_BASELINE,
-        null,
       ),
     );
   const [trackedContracts, setTrackedContracts] = useState<TrackedContract[]>(
-    () => readJsonStorage<TrackedContract[]>(STORAGE_KEYS.TRACKED, []),
+    () => readArrayStorage<TrackedContract>(STORAGE_KEYS.TRACKED),
   );
   const [monthlySnapshots, setMonthlySnapshots] = useState<MonthlySnapshot[]>(
-    () => readJsonStorage<MonthlySnapshot[]>(STORAGE_KEYS.SNAPSHOTS, []),
+    () => readArrayStorage<MonthlySnapshot>(STORAGE_KEYS.SNAPSHOTS),
   );
   const [notifPrefs, setNotifPrefs] = useState<NotificationPreferences>(() =>
-    readJsonStorage<NotificationPreferences>(STORAGE_KEYS.NOTIF_PREFS, {
+    readObjectStorage<NotificationPreferences>(STORAGE_KEYS.NOTIF_PREFS, {
       enabled: true,
       soundEnabled: true,
       hourlyReminder: true,
@@ -153,7 +185,7 @@ export default function App() {
   >('office_breakdown');
   const [settingsSubTab, setSettingsSubTab] = useState<'lookup' | 'backup'>('lookup');
   const [mrpMap, setMrpMap] = useState>(() => {
-    const rawObj = readJsonStorage<Record<string, MrpEnrichment>>(
+    const rawObj = readObjectStorage<Record<string, MrpEnrichment>>(
       STORAGE_KEYS.MRP_MAP,
       {},
     );
@@ -208,11 +240,17 @@ export default function App() {
       setIsSyncingCloud(true);
       try {
         const cloud = await fetchLiveCloudData();
-        if (cloud && cloud.aersRecords) {
+        if (cloud && Array.isArray(cloud.aersRecords)) {
           setAersRecords(cloud.aersRecords);
-          if (cloud.aersMeta) setAersMeta(cloud.aersMeta);
-          if (cloud.mrpMap) setMrpMap(new Map(Object.entries(cloud.mrpMap)));
-          if (cloud.openingBaseline) setOpeningBaseline(cloud.openingBaseline);
+          if (cloud.aersMeta && typeof cloud.aersMeta === 'object') {
+            setAersMeta(cloud.aersMeta);
+          }
+          if (cloud.mrpMap && typeof cloud.mrpMap === 'object' && !Array.isArray(cloud.mrpMap)) {
+            setMrpMap(new Map(Object.entries(cloud.mrpMap)));
+          }
+          if (cloud.openingBaseline && typeof cloud.openingBaseline === 'object') {
+            setOpeningBaseline(cloud.openingBaseline);
+          }
           if (Array.isArray(cloud.trackedContracts)) {
             setTrackedContracts(cloud.trackedContracts);
           }
@@ -292,7 +330,11 @@ export default function App() {
   // Sync theme to <html>
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDark);
-    localStorage.setItem(STORAGE_KEYS.THEME, isDark ? 'dark' : 'light');
+    try {
+      localStorage.setItem(STORAGE_KEYS.THEME, isDark ? 'dark' : 'light');
+    } catch {
+      // Ignore
+    }
   }, [isDark]);
 
   // Remove legacy duplicate storage keys
@@ -380,22 +422,32 @@ export default function App() {
   // Lookup indices & unified strategy metrics
   const aersMap = useMemo(() => {
     const map = new Map<string, AersRecord>();
-    aersRecords.forEach((r) => {
-      map.set(normalizeContractNo(r.contractNo), r);
-    });
+    if (Array.isArray(aersRecords)) {
+      aersRecords.forEach((r) => {
+        if (r && r.contractNo) {
+          map.set(normalizeContractNo(r.contractNo), r);
+        }
+      });
+    }
     return map;
   }, [aersRecords]);
 
-  const trackedContractNos = useMemo(
-    () => new Set(trackedContracts.map((c) => normalizeContractNo(c.contractNo))),
-    [trackedContracts],
-  );
+  const trackedContractNos = useMemo(() => {
+    if (!Array.isArray(trackedContracts)) return new Set<string>();
+    return new Set(
+      trackedContracts
+        .filter((c) => c && c.contractNo)
+        .map((c) => normalizeContractNo(c.contractNo)),
+    );
+  }, [trackedContracts]);
 
   const strategySummary = useMemo(() => {
+    const safeAers = Array.isArray(aersRecords) ? aersRecords : [];
+    const safeTracked = Array.isArray(trackedContracts) ? trackedContracts : [];
     const items =
-      aersRecords.length > 0
-        ? normalizeEvaluableFromAers(aersRecords, trackedContractNos, mrpMap)
-        : normalizeEvaluableFromTracked(trackedContracts);
+      safeAers.length > 0
+        ? normalizeEvaluableFromAers(safeAers, trackedContractNos, mrpMap)
+        : normalizeEvaluableFromTracked(safeTracked);
     const offices = computeOfficeTypeBreakdown(items);
     const borderline = analyzeNextMonthBorderline(items);
     const worstTotal = items.filter((i) => i.isWorst).length;
@@ -409,18 +461,21 @@ export default function App() {
   }, [aersRecords, trackedContracts, trackedContractNos, mrpMap]);
 
   const worstCount = useMemo(() => {
-    if (aersRecords.length > 0) {
+    if (Array.isArray(aersRecords) && aersRecords.length > 0) {
       return aersRecords.filter((r) =>
         isWorstCategory(r.nplReason, r.worstCaseProduct),
       ).length;
     }
-    return trackedContracts.filter((c) =>
-      isWorstCategory(c.nplReason, c.worstCaseProduct),
-    ).length;
+    if (Array.isArray(trackedContracts)) {
+      return trackedContracts.filter((c) =>
+        isWorstCategory(c.nplReason, c.worstCaseProduct),
+      ).length;
+    }
+    return 0;
   }, [aersRecords, trackedContracts]);
 
   const alertDigest = useMemo(
-    () => buildRecoveryAlertDigest(trackedContracts),
+    () => buildRecoveryAlertDigest(Array.isArray(trackedContracts) ? trackedContracts : []),
     [trackedContracts],
   );
 
@@ -576,7 +631,6 @@ export default function App() {
       },
     );
 
-    // Always replace openingBaseline with exact Excel ALL OFFICERS table or fresh AERS opening totals
     const nextBaseline =
       parsed.excelOfficerOpeningBaseline ??
       buildOpeningOfficerBaseline(
@@ -604,7 +658,6 @@ export default function App() {
     nextSnapshots.sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
     setMonthlySnapshots(nextSnapshots);
 
-    // Auto-publish live to GitHub so all users see the updated data immediately
     let cloudNote = ' · Saved locally (Add GitHub Token in Admin to publish live to everyone)';
     try {
       const published = await pushToLiveCloudIfConfigured({
@@ -635,7 +688,6 @@ export default function App() {
     );
   };
 
-  // Upload & Auto-Sync AERS Excel/CSV (Admin Only)
   const handleUploadAersFile = async (file: File) => {
     if (!isAdmin) {
       setAdminModalOpen(true);
