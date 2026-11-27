@@ -38,6 +38,7 @@ import {
 } from '../utils/recoveryEngine';
 import { FinancePortfolioIllustration } from './FinanceIllustrations';
 import { PaymentPatternStrip } from './PaymentPatternStrip';
+import { UserAvatar } from './UserAvatar';
 
 interface TrackingTableProps {
   contracts: TrackedContract[];
@@ -322,6 +323,7 @@ export function TrackingTable({
                 const isWorst = isWorstCategory(c.nplReason, c.worstCaseProduct);
                 const todayPp = isTodayPromiseToPay(c, todayISO);
                 const brokenPp = isBrokenPromiseToPay(c, todayISO);
+                const officerName = c.ro || c.recoveryOfficer || '—';
 
                 return (
                   <tr
@@ -360,18 +362,23 @@ export function TrackingTable({
                       />
                     </td>
 
-                    <td className="py-3 px-3 min-w-[140px]">
-                      <div className="font-mono font-medium text-slate-900 dark:text-slate-100">
-                        {c.vehicleNo || '—'}
-                      </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                        {c.officeType ? `${c.officeType} · ` : ''}RO: {c.ro || c.recoveryOfficer || '—'}
-                      </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
-                        With: {c.visitWith}
-                        {c.assignOfficerEfforts !== undefined
-                          ? ` · Efforts: ${c.assignOfficerEfforts}`
-                          : ''}
+                    <td className="py-3 px-3 min-w-[165px]">
+                      <div className="flex items-start gap-2">
+                        <UserAvatar name={officerName} sizeClass="w-7 h-7 text-[10px] mt-0.5" />
+                        <div>
+                          <div className="font-mono font-medium text-slate-900 dark:text-slate-100">
+                            {c.vehicleNo || '—'}
+                          </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                            {c.officeType ? `${c.officeType} · ` : ''}RO: {officerName}
+                          </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+                            With: {c.visitWith}
+                            {c.assignOfficerEfforts !== undefined
+                              ? ` · Efforts: ${c.assignOfficerEfforts}`
+                              : ''}
+                          </div>
+                        </div>
                       </div>
                     </td>
 
