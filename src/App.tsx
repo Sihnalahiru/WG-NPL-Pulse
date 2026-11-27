@@ -33,6 +33,7 @@ import { AnalyticsCharts } from './components/AnalyticsCharts';
 import { BackupSettingsPanel } from './components/BackupSettingsPanel';
 import { BmPortfolioAnalyticsPanel } from './components/BmPortfolioAnalyticsPanel';
 import { ContractModal } from './components/ContractModal';
+import { ExecutiveOfficerHubPanel } from './components/ExecutiveOfficerHubPanel';
 import strategyHeroImg from './assets/images/finance_strategy_hero_1795684833730.jpg';
 import { PulseLogoMark } from './components/FinanceIllustrations';
 import { KpiStrip } from './components/KpiStrip';
@@ -184,7 +185,7 @@ export default function App() {
     'office_breakdown' | 'bm_analytics' | 'ai' | 'alerts'
   >('office_breakdown');
   const [settingsSubTab, setSettingsSubTab] = useState<'lookup' | 'backup'>('lookup');
-  const [mrpMap, setMrpMap] = useState<Map<string, MrpEnrichment>>(() => {
+  const [mrpMap, setMrpMap] = useState>(() => {
     const rawObj = readObjectStorage<Record<string, MrpEnrichment>>(
       STORAGE_KEYS.MRP_MAP,
       {},
@@ -194,6 +195,7 @@ export default function App() {
   const [regularContractNos, setRegularContractNos] = useState<Set<string>>(() => new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterPreset>('all');
+  const [selectedOfficer, setSelectedOfficer] = useState<string>('ALL');
   const [animKey, setAnimKey] = useState(0);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
 
@@ -245,7 +247,11 @@ export default function App() {
           if (cloud.aersMeta && typeof cloud.aersMeta === 'object') {
             setAersMeta(cloud.aersMeta);
           }
-          if (cloud.mrpMap && typeof cloud.mrpMap === 'object' && !Array.isArray(cloud.mrpMap)) {
+          if (
+            cloud.mrpMap &&
+            typeof cloud.mrpMap === 'object' &&
+            !Array.isArray(cloud.mrpMap)
+          ) {
             setMrpMap(new Map(Object.entries(cloud.mrpMap)));
           }
           if (cloud.openingBaseline && typeof cloud.openingBaseline === 'object') {
@@ -419,6 +425,19 @@ export default function App() {
     }
   }, [notifPrefs]);
 
+  // Filtered subsets when an RO / MO card or selector is chosen
+  const visibleAersRecords = useMemo(() => {
+    const safeAers = Array.isArray(aersRecords) ? aersRecords : [];
+    if (selectedOfficer === 'ALL') return safeAers;
+    return safeAers.filter((r) => getOfficerByOfficeType(r) === selectedOfficer);
+  }, [aersRecords, selectedOfficer]);
+
+  const visibleTrackedContracts = useMemo(() => {
+    const safeTracked = Array.isArray(trackedContracts) ? trackedContracts : [];
+    if (selectedOfficer === 'ALL') return safeTracked;
+    return safeTracked.filter((c) => getOfficerByOfficeType(c) === selectedOfficer);
+  }, [trackedContracts, selectedOfficer]);
+
   // Lookup indices & unified strategy metrics
   const aersMap = useMemo(() => {
     const map = new Map<string, AersRecord>();
@@ -442,12 +461,10 @@ export default function App() {
   }, [trackedContracts]);
 
   const strategySummary = useMemo(() => {
-    const safeAers = Array.isArray(aersRecords) ? aersRecords : [];
-    const safeTracked = Array.isArray(trackedContracts) ? trackedContracts : [];
     const items =
-      safeAers.length > 0
-        ? normalizeEvaluableFromAers(safeAers, trackedContractNos, mrpMap)
-        : normalizeEvaluableFromTracked(safeTracked);
+      visibleAersRecords.length > 0
+        ? normalizeEvaluableFromAers(visibleAersRecords, trackedContractNos, mrpMap)
+        : normalizeEvaluableFromTracked(visibleTrackedContracts);
     const offices = computeOfficeTypeBreakdown(items);
     const borderline = analyzeNextMonthBorderline(items);
     const worstTotal = items.filter((i) => i.isWorst).length;
@@ -458,25 +475,22 @@ export default function App() {
       borderlineEfforts: borderline.totalBorderlineEfforts,
       worstCount: worstTotal,
     };
-  }, [aersRecords, trackedContracts, trackedContractNos, mrpMap]);
+  }, [visibleAersRecords, visibleTrackedContracts, trackedContractNos, mrpMap]);
 
   const worstCount = useMemo(() => {
-    if (Array.isArray(aersRecords) && aersRecords.length > 0) {
-      return aersRecords.filter((r) =>
+    if (visibleAersRecords.length > 0) {
+      return visibleAersRecords.filter((r) =>
         isWorstCategory(r.nplReason, r.worstCaseProduct),
       ).length;
     }
-    if (Array.isArray(trackedContracts)) {
-      return trackedContracts.filter((c) =>
-        isWorstCategory(c.nplReason, c.worstCaseProduct),
-      ).length;
-    }
-    return 0;
-  }, [aersRecords, trackedContracts]);
+    return visibleTrackedContracts.filter((c) =>
+      isWorstCategory(c.nplReason, c.worstCaseProduct),
+    ).length;
+  }, [visibleAersRecords, visibleTrackedContracts]);
 
   const alertDigest = useMemo(
-    () => buildRecoveryAlertDigest(Array.isArray(trackedContracts) ? trackedContracts : []),
-    [trackedContracts],
+    () => buildRecoveryAlertDigest(visibleTrackedContracts),
+    [visibleTrackedContracts],
   );
 
   const urgentAlertsCount =
@@ -987,6 +1001,7 @@ export default function App() {
     setOpeningBaseline(null);
     setTrackedContracts([]);
     setMonthlySnapshots([]);
+    setSelectedOfficer('ALL');
     localStorage.removeItem(STORAGE_KEYS.AERS_MASTER);
     localStorage.removeItem(STORAGE_KEYS.AERS_META);
     localStorage.removeItem(STORAGE_KEYS.MRP_MAP);
@@ -1283,9 +1298,9 @@ export default function App() {
             </span>
             <span aria-hidden="true">·</span>
             <span>
-              Office Types:{' '}
-              <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
-                {strategySummary.officeTypesCount}
+              Scope:{' '}
+              <span className="font-mono font-semibold text-emerald-700 dark:text-emerald-400">
+                {selectedOfficer === 'ALL' ? 'All Officers (Branch)' : selectedOfficer}
               </span>
             </span>
             <span aria-hidden="true">·</span>
@@ -1299,9 +1314,9 @@ export default function App() {
             <span>
               Watchlist:{' '}
               <span className="font-mono text-slate-900 dark:text-slate-200">
-                {trackedContracts.length}
+                {visibleTrackedContracts.length}
               </span>{' '}
-              of {aersRecords.length.toLocaleString()} indexed
+              of {visibleAersRecords.length.toLocaleString()} indexed
             </span>
           </div>
 
@@ -1342,7 +1357,7 @@ export default function App() {
           <span>· Broken P/P: {alertDigest.brokenPp.length} high priority follow-ups</span>
           <span>· 91-DPD Danger Zone: {alertDigest.dpd91Danger.length} contracts crossing this month</span>
           <span>· Hand Over Pending: {alertDigest.pendingHandOver.length} repossession files</span>
-          <span>· WhatsApp GPS Pins Synced: {trackedContracts.filter(c => c.locationUrl).length} active locations</span>
+          <span>· WhatsApp GPS Pins Synced: {visibleTrackedContracts.filter((c) => c.locationUrl).length} active locations</span>
           <span className="inline-flex items-center gap-1.5 font-bold text-emerald-300 ml-8">
             <Bell className="w-3.5 h-3.5 animate-bounce" />
             LIVE RECOVERY ALERTS:
@@ -1351,7 +1366,7 @@ export default function App() {
           <span>· Broken P/P: {alertDigest.brokenPp.length} high priority follow-ups</span>
           <span>· 91-DPD Danger Zone: {alertDigest.dpd91Danger.length} contracts crossing this month</span>
           <span>· Hand Over Pending: {alertDigest.pendingHandOver.length} repossession files</span>
-          <span>· WhatsApp GPS Pins Synced: {trackedContracts.filter(c => c.locationUrl).length} active locations</span>
+          <span>· WhatsApp GPS Pins Synced: {visibleTrackedContracts.filter((c) => c.locationUrl).length} active locations</span>
         </div>
       </div>
 
@@ -1544,16 +1559,29 @@ export default function App() {
                 </div>
               </section>
 
-              <KpiStrip
-                contracts={trackedContracts}
+              {/* Creative Top Section Hub: RO/MO Profile Cards + Bulk Effort Monitor + Campaign + AI Variance */}
+              <ExecutiveOfficerHubPanel
                 aersRecords={aersRecords}
+                aersMeta={aersMeta}
+                trackedContracts={trackedContracts}
+                mrpMap={mrpMap}
+                openingBaseline={openingBaseline}
+                monthlySnapshots={monthlySnapshots}
+                selectedOfficer={selectedOfficer}
+                onSelectOfficer={setSelectedOfficer}
+                onAddFromMaster={handleAddFromMaster}
+              />
+
+              <KpiStrip
+                contracts={visibleTrackedContracts}
+                aersRecords={visibleAersRecords}
                 mrpMap={mrpMap}
                 animKey={animKey}
               />
 
               <TrendsEvaluationPanel
-                trackedContracts={trackedContracts}
-                aersRecords={aersRecords}
+                trackedContracts={visibleTrackedContracts}
+                aersRecords={visibleAersRecords}
                 aersMeta={aersMeta}
                 mrpMap={mrpMap}
                 openingBaseline={openingBaseline}
@@ -1566,7 +1594,7 @@ export default function App() {
               />
 
               <TrackingTable
-                contracts={trackedContracts}
+                contracts={visibleTrackedContracts}
                 mrpMap={mrpMap}
                 searchQuery={searchQuery}
                 onSearchChange={setSearchQuery}
@@ -1598,8 +1626,8 @@ export default function App() {
               />
 
               <AnalyticsCharts
-                contracts={trackedContracts}
-                aersRecords={aersRecords}
+                contracts={visibleTrackedContracts}
+                aersRecords={visibleAersRecords}
                 snapshots={monthlySnapshots}
                 isDark={isDark}
                 showSnapshotLedger={true}
@@ -1623,8 +1651,8 @@ export default function App() {
 
           {activeNav === 'borderline' && (
             <NextMonthBorderlineCardsPanel
-              trackedContracts={trackedContracts}
-              aersRecords={aersRecords}
+              trackedContracts={visibleTrackedContracts}
+              aersRecords={visibleAersRecords}
               mrpMap={mrpMap}
               onAddFromMaster={handleAddFromMaster}
               onLogVisit={(c) =>
@@ -1639,8 +1667,8 @@ export default function App() {
 
           {activeNav === 'worst' && (
             <WorstCasePanel
-              trackedContracts={trackedContracts}
-              aersRecords={aersRecords}
+              trackedContracts={visibleTrackedContracts}
+              aersRecords={visibleAersRecords}
               mrpMap={mrpMap}
               onAddFromMaster={handleAddFromMaster}
             />
@@ -1730,18 +1758,18 @@ export default function App() {
 
               {toolsSubTab === 'office_breakdown' && (
                 <OfficeTypeBreakdownPanel
-                  trackedContracts={trackedContracts}
-                  aersRecords={aersRecords}
+                  trackedContracts={visibleTrackedContracts}
+                  aersRecords={visibleAersRecords}
                   title="Office Type -> Officer Strategy Breakdown (NPL & Borderline)"
                 />
               )}
 
               {toolsSubTab === 'bm_analytics' && (
                 <BmPortfolioAnalyticsPanel
-                  aersRecords={aersRecords}
+                  aersRecords={visibleAersRecords}
                   aersMeta={aersMeta}
                   mrpMap={mrpMap}
-                  trackedContracts={trackedContracts}
+                  trackedContracts={visibleTrackedContracts}
                   monthlySnapshots={monthlySnapshots}
                   isDark={isDark}
                   onAddFromMaster={handleAddFromMaster}
@@ -1757,8 +1785,8 @@ export default function App() {
 
               {toolsSubTab === 'ai' && (
                 <AiRecoveryAgentPanel
-                  trackedContracts={trackedContracts}
-                  aersRecords={aersRecords}
+                  trackedContracts={visibleTrackedContracts}
+                  aersRecords={visibleAersRecords}
                   aersMeta={aersMeta}
                   openingBaseline={openingBaseline}
                 />
@@ -1766,7 +1794,7 @@ export default function App() {
 
               {toolsSubTab === 'alerts' && (
                 <AlertsNotificationsPanel
-                  contracts={trackedContracts}
+                  contracts={visibleTrackedContracts}
                   prefs={notifPrefs}
                   permissionState={permissionState}
                   onUpdatePrefs={setNotifPrefs}
