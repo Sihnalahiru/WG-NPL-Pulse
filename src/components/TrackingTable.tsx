@@ -91,12 +91,6 @@ export function TrackingTable({
       .length,
     npl_saved: searchMatchedContracts.filter((c) => isNplSavedAccount(c))
       .length,
-    today_pp: searchMatchedContracts.filter((c) =>
-      isTodayPromiseToPay(c, todayISO),
-    ).length,
-    broken_pp: searchMatchedContracts.filter((c) =>
-      isBrokenPromiseToPay(c, todayISO),
-    ).length,
   };
 
   const filtered = searchMatchedContracts.filter((c) => {
@@ -107,10 +101,6 @@ export function TrackingTable({
         return isCurrentNplAccount(c);
       case 'npl_saved':
         return isNplSavedAccount(c);
-      case 'today_pp':
-        return isTodayPromiseToPay(c, todayISO);
-      case 'broken_pp':
-        return isBrokenPromiseToPay(c, todayISO);
       default:
         return true;
     }
@@ -125,8 +115,6 @@ export function TrackingTable({
     },
     { id: 'current_npl', label: 'Current NPL (91+ DPD)', count: counts.current_npl },
     { id: 'npl_saved', label: 'NPL Saved', count: counts.npl_saved },
-    { id: 'today_pp', label: "Today's PTP", count: counts.today_pp },
-    { id: 'broken_pp', label: 'Broken PTP', count: counts.broken_pp },
   ];
 
   const renderSituationBadge = (c: TrackedContract) => {
