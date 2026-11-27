@@ -26,6 +26,7 @@ import {
 } from '../utils/recoveryEngine';
 import { NextMonthBorderlineCardsPanel } from './NextMonthBorderlineCardsPanel';
 import { OfficerEffortSummaryPanel } from './OfficerEffortSummaryPanel';
+import { UserAvatar } from './UserAvatar';
 
 interface BmPortfolioAnalyticsPanelProps {
   aersRecords: AersRecord[];
@@ -82,7 +83,6 @@ export function BmPortfolioAnalyticsPanel({
     return rows.filter((r) => r.officer.toLowerCase().includes(q));
   }, [aersMeta, aersRecords, trackedContracts, officerRole, officerSearch]);
 
-  // Latest saved snapshot per campaign month (Nov 2026 -> Mar 2027)
   const campaignProgress = useMemo(() => {
     const byMonth = new Map<string, MonthlySnapshot>();
     const sorted = [...monthlySnapshots].sort((a, b) =>
@@ -427,7 +427,10 @@ export function BmPortfolioAnalyticsPanel({
                       className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30"
                     >
                       <td className="py-2.5 px-4 font-semibold text-slate-900 dark:text-slate-100">
-                        {row.officer}
+                        <div className="flex items-center gap-2.5">
+                          <UserAvatar name={row.officer} sizeClass="w-7 h-7 text-[10px]" />
+                          <span>{row.officer}</span>
+                        </div>
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-700 dark:text-slate-300">
                         {row.totalCount.toLocaleString()}
