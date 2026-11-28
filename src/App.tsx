@@ -2519,6 +2519,8 @@ export default function App() {
                 aersMeta={aersMeta}
                 mrpMap={mrpMap}
                 isDark={isDark}
+                isAdmin={isAdmin}
+                onUploadWorkbook={handleUploadAersFile}
               />
             </SectionSafeBoundary>
           )}

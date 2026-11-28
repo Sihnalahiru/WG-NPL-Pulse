@@ -10,6 +10,7 @@ import type {
   BelowThreeOfficerRow,
   BelowThreeSubBucket,
   BmAgeBucketDatum,
+  BmDashboardBelowThreeExtracted,
   BmOfficerPerformanceRow,
   BorderlineAccountItem,
   BorderlineSaveAnalysis,
@@ -896,10 +897,426 @@ function parseSheet2Watchlist(rows: unknown[][]): Sheet2WatchlistRow[] {
   return results;
 }
 
+function parsePctValue(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === '') return null;
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return null;
+    if (Math.abs(raw) <= 2.5) return Math.round(raw * 1000) / 10;
+    return Math.round(raw * 10) / 10;
+  }
+  const str = String(raw).trim();
+  if (!str || str === '-') return null;
+  const hasPct = str.includes('%');
+  const num = parseNumeric(str.replace(/%/g, ''));
+  if (!Number.isFinite(num)) return null;
+  if (!hasPct && Math.abs(num) > 0 && Math.abs(num) <= 2.5) {
+    return Math.round(num * 1000) / 10;
+  }
+  return Math.round(num * 10) / 10;
+}
+
+function parseAmountWithMillionHint(raw: unknown, headerHint = ''): number | null {
+  if (raw === null || raw === undefined || raw === '') return null;
+  const str = String(raw).trim();
+  if (!str || str === '-') return null;
+  const hasMillionSuffix = /\b(mn|m|million)\b/i.test(str) || /[0-9]\s*m$/i.test(str);
+  const headerIsMillions = /\b(mn|million|rs\.?\s*m|\(m\))\b/i.test(headerHint);
+  const cleaned = str.replace(/\b(mn|million)\b/gi, '').replace(/m$/i, '').trim();
+  const num = parseNumeric(cleaned);
+  if (!Number.isFinite(num)) return null;
+  if (hasMillionSuffix || headerIsMillions) {
+    return Math.abs(num) < 10_000 ? Math.round(num * 1_000_000) : Math.round(num);
+  }
+  return Math.round(num);
+}
+
+function parseBmDashboardBelowThree(
+  rows: unknown[][],
+  sheetName: string,
+  knownOfficers: Map<string, { officer: string; role: string }>,
+): BmDashboardBelowThreeExtracted | undefined {
+  if (!rows || rows.length === 0) return undefined;
+
+  const BELOW3_REGEX =
+    /(below\s*[-–_]?\s*3|b\s*[-–_]?\s*3\s*(coll|target|due|age|bucket)|<\s*3(\.00?)?|\b0\s*[-–~]\s*2\.99\b|age\s*<\s*3|below\s+three)/i;
+
+  const matchOfficer = (raw: string): { officer: string; role?: string } | null => {
+    const cleaned = stripOfficerPrefix(raw)
+      .replace(/\s*\((ro|mo)\)\s*$/i, '')
+      .trim();
+    if (!cleaned || cleaned.length < 2) return null;
+    const lower = cleaned.toLowerCase();
+    const direct = knownOfficers.get(lower);
+    if (direct) return direct;
+    // Partial / token match against known AERS officers (e.g. "Madusanka L" -> "madusankal")
+    const compact = lower.replace(/[^a-z0-9]/g, '');
+    for (const [k, val] of knownOfficers.entries()) {
+      const kc = k.replace(/[^a-z0-9]/g, '');
+      if (kc === compact || (compact.length >= 5 && (kc.includes(compact) || compact.includes(kc)))) {
+        return val;
+      }
+    }
+    return null;
+  };
+
+  interface ColMap {
+    officerCol?: number;
+    targetCol?: number;
+    targetHint?: string;
+    collectedCol?: number;
+    collectedHint?: string;
+    varianceCol?: number;
+    varianceHint?: string;
+    pctCol?: number;
+    totalCountCol?: number;
+    paidCountCol?: number;
+    notPaidCountCol?: number;
+    neededCountCol?: number;
+  }
+
+  const detectHeaderCols = (row: unknown[], minCol: number, maxCol: number): ColMap | null => {
+    const map: ColMap = {};
+    let hits = 0;
+    const end = Math.min(row.length - 1, maxCol);
+    for (let c = Math.max(0, minCol); c <= end; c++) {
+      const h = String(row[c] ?? '').trim().replace(/\s+/g, ' ');
+      if (!h) continue;
+      const hl = h.toLowerCase();
+
+      if (
+        map.officerCol === undefined &&
+        /^(officer|ro|mo|ro\s*\/\s*mo|name|staff|user|exec|code|recovery\s*officer|marketing\s*officer|assigned\s*officer|category|description|particulars)$/i.test(
+          hl,
+        )
+      ) {
+        map.officerCol = c;
+      } else if (
+        map.pctCol === undefined &&
+        /(%|pct|ach\s*%|coll\s*%|eff\s*%|ratio|rate|achievement\s*%)/i.test(hl) &&
+        !/not\s*paid|unpaid/i.test(hl)
+      ) {
+        map.pctCol = c;
+        hits += 1;
+      } else if (
+        map.notPaidCountCol === undefined &&
+        /(not\s*paid|unpaid|non\s*paid|pending\s*(acct|cont|no|cnt)|np\s*(acct|cont|cnt)?|^np$)/i.test(hl) &&
+        !/amt|amount|rs|val/i.test(hl)
+      ) {
+        map.notPaidCountCol = c;
+        hits += 1;
+      } else if (
+        map.paidCountCol === undefined &&
+        /(paid\s*(acct|cont|no|cnt)|^paid$|^paid\s*count$)/i.test(hl) &&
+        !/not\s*paid|unpaid|amt|amount|rs/i.test(hl)
+      ) {
+        map.paidCountCol = c;
+        hits += 1;
+      } else if (
+        map.neededCountCol === undefined &&
+        /(need|req|bal\s*(acct|cont)|to\s*pay\s*(acct|cont)|rem\s*(acct|cont))/i.test(hl)
+      ) {
+        map.neededCountCol = c;
+        hits += 1;
+      } else if (
+        map.totalCountCol === undefined &&
+        /(total\s*(acct|cont|no|cnt)|no\.?\s*of\s*(cont|acct)|^accts?$|^contracts?$|^count$|^nos?\.?$)/i.test(hl)
+      ) {
+        map.totalCountCol = c;
+        hits += 1;
+      } else if (
+        map.varianceCol === undefined &&
+        /(var|variance|bal|balance|short|shortfall|gap|rem|remaining|diff|pending\s*amt|need\s*amt)/i.test(hl) &&
+        !/%|acct|cont|count/i.test(hl)
+      ) {
+        map.varianceCol = c;
+        map.varianceHint = h;
+        hits += 1;
+      } else if (
+        map.targetCol === undefined &&
+        /(target|budget|monthly\s*due|due\s*budget|due\s*amt|collectible|b3\s*due|b3\s*target|below\s*3\s*(target|due)|^due$)/i.test(
+          hl,
+        ) &&
+        !/%|acct|cont|count|coll|actual|ach/i.test(hl)
+      ) {
+        map.targetCol = c;
+        map.targetHint = h;
+        hits += 1;
+      } else if (
+        map.collectedCol === undefined &&
+        /(coll|collection|collected|actual|achiev|received|cash\s*coll|total\s*coll|paid\s*amt)/i.test(hl) &&
+        !/%|rate|ratio|eff|target|due|budget|acct|cont|count/i.test(hl)
+      ) {
+        map.collectedCol = c;
+        map.collectedHint = h;
+        hits += 1;
+      }
+    }
+
+    if ((map.targetCol !== undefined || map.collectedCol !== undefined) && hits >= 2) {
+      return map;
+    }
+    return null;
+  };
+
+  let bestTarget = 0;
+  let bestCollected = 0;
+  let bestVariance: number | null = null;
+  let bestPct: number | null = null;
+  let bestTotalCount: number | undefined;
+  let bestPaidCount: number | undefined;
+  let bestNotPaidCount: number | undefined;
+  let bestNeededCount: number | undefined;
+  const officerMap = new Map<
+    string,
+    BmDashboardBelowThreeExtracted['byOfficer'][number]
+  >();
+
+  // Locate every cell mentioning "Below 3"
+  const anchorCells: { r: number; c: number; text: string }[] = [];
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r] || [];
+    for (let c = 0; c < row.length; c++) {
+      const txt = String(row[c] ?? '').trim();
+      if (txt && txt.length <= 120 && BELOW3_REGEX.test(txt)) {
+        anchorCells.push({ r, c, text: txt });
+      }
+    }
+  }
+
+  for (const anchor of anchorCells) {
+    // Strategy 1: Header row is at anchor.r .. anchor.r + 5 (Below 3 Collection officer/summary table)
+    let tableFound = false;
+    for (let hr = anchor.r; hr <= Math.min(rows.length - 1, anchor.r + 5); hr++) {
+      const cols = detectHeaderCols(rows[hr] || [], anchor.c - 2, anchor.c + 18);
+      if (!cols || cols.targetCol === undefined || cols.collectedCol === undefined) continue;
+
+      tableFound = true;
+      const labelCol = cols.officerCol ?? anchor.c;
+      let blankStreak = 0;
+
+      for (let dr = hr + 1; dr <= Math.min(rows.length - 1, hr + 35); dr++) {
+        const drow = rows[dr] || [];
+        const rawLabel = String(drow[labelCol] ?? drow[anchor.c] ?? '').trim();
+        const tVal = parseAmountWithMillionHint(drow[cols.targetCol], cols.targetHint);
+        const cVal = parseAmountWithMillionHint(drow[cols.collectedCol], cols.collectedHint);
+
+        if (!rawLabel && tVal === null && cVal === null) {
+          blankStreak += 1;
+          if (blankStreak >= 2) break;
+          continue;
+        }
+        blankStreak = 0;
+
+        const isTotalRow =
+          /^(grand\s*)?(branch\s*)?(sub\s*)?total\b|^all\b|^branch\s*total$|^total\s*below\s*3/i.test(
+            rawLabel,
+          );
+
+        const vVal =
+          cols.varianceCol !== undefined
+            ? parseAmountWithMillionHint(drow[cols.varianceCol], cols.varianceHint)
+            : null;
+        const pVal = cols.pctCol !== undefined ? parsePctValue(drow[cols.pctCol]) : null;
+        const totCnt =
+          cols.totalCountCol !== undefined ? Math.round(parseNumeric(drow[cols.totalCountCol])) : undefined;
+        const paidCnt =
+          cols.paidCountCol !== undefined ? Math.round(parseNumeric(drow[cols.paidCountCol])) : undefined;
+        const npCnt =
+          cols.notPaidCountCol !== undefined
+            ? Math.round(parseNumeric(drow[cols.notPaidCountCol]))
+            : undefined;
+        const needCnt =
+          cols.neededCountCol !== undefined
+            ? Math.round(parseNumeric(drow[cols.neededCountCol]))
+            : undefined;
+
+        if (isTotalRow && tVal && tVal > 0 && cVal !== null && cVal >= 0) {
+          if (tVal > bestTarget) {
+            bestTarget = tVal;
+            bestCollected = cVal;
+            bestVariance = vVal;
+            bestPct = pVal;
+            if (totCnt && totCnt > 0) bestTotalCount = totCnt;
+            if (paidCnt !== undefined && paidCnt > 0) bestPaidCount = paidCnt;
+            if (npCnt !== undefined && npCnt >= 0) bestNotPaidCount = npCnt;
+            if (needCnt !== undefined && needCnt >= 0) bestNeededCount = needCnt;
+          }
+          break;
+        }
+
+        const matchedOff = matchOfficer(rawLabel);
+        if (matchedOff && tVal !== null && tVal > 0 && cVal !== null && cVal >= 0) {
+          const variance = Math.round(cVal - tVal);
+          const pct =
+            pVal !== null && pVal >= 0
+              ? pVal
+              : tVal > 0
+                ? Math.round((cVal / tVal) * 1000) / 10
+                : 0;
+          officerMap.set(matchedOff.officer, {
+            officer: matchedOff.officer,
+            role: matchedOff.role,
+            targetAmount: tVal,
+            collectedAmount: cVal,
+            varianceAmount: variance,
+            collectionPct: pct,
+            totalCount: totCnt && totCnt > 0 ? totCnt : undefined,
+            paidCount: paidCnt !== undefined && paidCnt >= 0 ? paidCnt : undefined,
+            notPaidCount: npCnt !== undefined && npCnt >= 0 ? npCnt : undefined,
+            contractsNeeded: needCnt !== undefined && needCnt >= 0 ? needCnt : undefined,
+          });
+        }
+      }
+      if (tableFound) break;
+    }
+
+    // Strategy 2: Summary row itself is "Below 3 Collection" with headers 1..8 rows ABOVE
+    if (!tableFound) {
+      for (let hr = anchor.r - 1; hr >= Math.max(0, anchor.r - 8); hr--) {
+        const cols = detectHeaderCols(rows[hr] || [], anchor.c - 1, anchor.c + 16);
+        if (!cols || cols.targetCol === undefined || cols.collectedCol === undefined) continue;
+
+        const drow = rows[anchor.r] || [];
+        const tVal = parseAmountWithMillionHint(drow[cols.targetCol], cols.targetHint);
+        const cVal = parseAmountWithMillionHint(drow[cols.collectedCol], cols.collectedHint);
+        if (tVal && tVal > 0 && cVal !== null && cVal >= 0 && tVal > bestTarget) {
+          bestTarget = tVal;
+          bestCollected = cVal;
+          bestVariance =
+            cols.varianceCol !== undefined
+              ? parseAmountWithMillionHint(drow[cols.varianceCol], cols.varianceHint)
+              : null;
+          bestPct = cols.pctCol !== undefined ? parsePctValue(drow[cols.pctCol]) : null;
+          const totCnt =
+            cols.totalCountCol !== undefined ? Math.round(parseNumeric(drow[cols.totalCountCol])) : 0;
+          const paidCnt =
+            cols.paidCountCol !== undefined ? Math.round(parseNumeric(drow[cols.paidCountCol])) : 0;
+          const npCnt =
+            cols.notPaidCountCol !== undefined
+              ? Math.round(parseNumeric(drow[cols.notPaidCountCol]))
+              : 0;
+          if (totCnt > 0) bestTotalCount = totCnt;
+          if (paidCnt > 0) bestPaidCount = paidCnt;
+          if (npCnt > 0) bestNotPaidCount = npCnt;
+        }
+        break;
+      }
+    }
+
+    // Strategy 3: Key-value KPI block around anchor cell (Target / Collection / Variance / %)
+    let kvTarget = 0;
+    let kvCollected = 0;
+    let kvPct: number | null = null;
+    for (let r = anchor.r; r <= Math.min(rows.length - 1, anchor.r + 9); r++) {
+      const row = rows[r] || [];
+      for (let c = Math.max(0, anchor.c - 1); c <= Math.min(row.length - 1, anchor.c + 10); c++) {
+        const lbl = String(row[c] ?? '').trim();
+        if (!lbl || lbl.length > 60) continue;
+        const ll = lbl.toLowerCase();
+
+        const readAdjacentNum = (isPct = false): number | null => {
+          const candidates = [
+            row[c + 1],
+            row[c + 2],
+            rows[r + 1]?.[c],
+          ];
+          for (const cand of candidates) {
+            if (cand === undefined || cand === null || cand === '') continue;
+            if (typeof cand === 'string' && /[a-z]{3,}/i.test(cand) && !/\b(rs|mn|million)\b/i.test(cand)) {
+              continue;
+            }
+            const parsed = isPct
+              ? parsePctValue(cand)
+              : parseAmountWithMillionHint(cand, lbl);
+            if (parsed !== null && parsed !== 0) return parsed;
+          }
+          return null;
+        };
+
+        if (
+          kvTarget === 0 &&
+          /(target|budget|monthly\s*due|due\s*amt|below\s*3\s*(target|due)|^due$)/i.test(ll) &&
+          !/%|coll|actual|ach|count|acct/i.test(ll)
+        ) {
+          const v = readAdjacentNum(false);
+          if (v && v > 0) kvTarget = v;
+        } else if (
+          kvCollected === 0 &&
+          /(collection|collected|actual|achieved|total\s*coll|cash\s*coll|below\s*3\s*coll)/i.test(ll) &&
+          !/%|target|due|budget|count|acct/i.test(ll)
+        ) {
+          const v = readAdjacentNum(false);
+          if (v && v > 0) kvCollected = v;
+        } else if (
+          kvPct === null &&
+          /(%|ach\s*%|coll\s*%|achievement|ratio)/i.test(ll)
+        ) {
+          const v = readAdjacentNum(true);
+          if (v !== null && v > 0) kvPct = v;
+        }
+      }
+    }
+    if (kvTarget > 0 && kvCollected > 0 && kvTarget > bestTarget) {
+      bestTarget = kvTarget;
+      bestCollected = kvCollected;
+      bestPct = kvPct;
+    }
+  }
+
+  // If officer rows were extracted from BM Dashboard sheet but no Total row was matched, sum them!
+  const byOfficer = Array.from(officerMap.values());
+  if (bestTarget === 0 && byOfficer.length >= 2) {
+    bestTarget = byOfficer.reduce((s, o) => s + o.targetAmount, 0);
+    bestCollected = byOfficer.reduce((s, o) => s + o.collectedAmount, 0);
+  }
+
+  // Auto-scale if values were stored in Millions without explicit "M" suffix (e.g., 32.45 and 23.80)
+  if (bestTarget > 1 && bestTarget < 500 && bestCollected >= 0 && bestCollected < 500) {
+    bestTarget = Math.round(bestTarget * 1_000_000);
+    bestCollected = Math.round(bestCollected * 1_000_000);
+    if (bestVariance !== null && Math.abs(bestVariance) < 500) {
+      bestVariance = Math.round(bestVariance * 1_000_000);
+    }
+    for (const o of byOfficer) {
+      if (o.targetAmount > 0 && o.targetAmount < 500) {
+        o.targetAmount = Math.round(o.targetAmount * 1_000_000);
+        o.collectedAmount = Math.round(o.collectedAmount * 1_000_000);
+        o.varianceAmount = o.collectedAmount - o.targetAmount;
+      }
+    }
+  }
+
+  if (bestTarget < 100_000) {
+    return undefined;
+  }
+
+  const normalizedVariance = Math.round(bestCollected - bestTarget);
+  const normalizedPct =
+    bestPct !== null && bestPct > 0 && bestPct <= 200
+      ? bestPct
+      : bestTarget > 0
+        ? Math.round((bestCollected / bestTarget) * 1000) / 10
+        : 0;
+
+  return {
+    sheetName,
+    targetAmount: Math.round(bestTarget),
+    collectedAmount: Math.round(bestCollected),
+    varianceAmount: normalizedVariance,
+    collectionPct: normalizedPct,
+    totalCount: bestTotalCount,
+    paidCount: bestPaidCount,
+    notPaidCount: bestNotPaidCount,
+    contractsNeeded: bestNeededCount,
+    byOfficer,
+  };
+}
+
 function applyStrictNplUniverseFilter(
   baseResult: ParsedAersResult,
   mrpMap?: Map<string, MrpEnrichment>,
   watchlistImports?: Sheet2WatchlistRow[],
+  bmDashboardBelowThree?: BmDashboardBelowThreeExtracted,
 ): ParsedAersResult {
   const allRecords = baseResult.records;
   const ageBuckets = computeBmAgeBuckets(allRecords, []);
@@ -918,7 +1335,11 @@ function applyStrictNplUniverseFilter(
     moPerformance: computeBmOfficerPerformance(allRecords, [], 'MO'),
     ageGroupEfforts: computeAgeGroupEfforts(allRecords),
     belowOneQuickWins: extractBelowOneQuickWins(allRecords),
-    belowThreeSummary: computeBelowThreeCollectionSnapshot(allRecords, 650),
+    belowThreeSummary: computeBelowThreeCollectionSnapshot(
+      allRecords,
+      650,
+      bmDashboardBelowThree,
+    ),
     totalContracts,
     belowOneCount,
     ratio90Pct,
@@ -950,7 +1371,7 @@ function applyStrictNplUniverseFilter(
     },
     mrpMap,
     watchlistImports,
-    isMultiSheetWorkbook: Boolean(mrpMap || watchlistImports),
+    isMultiSheetWorkbook: Boolean(mrpMap || watchlistImports || bmDashboardBelowThree),
     excludedRegularContractNos,
   };
 }
@@ -1013,7 +1434,46 @@ export function parseAersWorkbook(
     }
   }
 
-  return applyStrictNplUniverseFilter(baseResult, mrpMap, watchlistImports);
+  // Parse BM Dashboard sheet for exact Below 3 Collection Target / Collection / Variance
+  const bmDashSheetName =
+    sheetLookup.get('bm dashboard') ??
+    sheetLookup.get('bm_dashboard') ??
+    sheetLookup.get('bmdashboard') ??
+    workbook.SheetNames.find((n) => /bm.*dash|dashboard.*bm/i.test(n)) ??
+    workbook.SheetNames.find(
+      (n) =>
+        /dashboard|summary/i.test(n) &&
+        n !== aersSheetName &&
+        n !== mrpSheetName &&
+        n !== sheet2Name,
+    );
+
+  let bmDashboardBelowThree: BmDashboardBelowThreeExtracted | undefined;
+  if (bmDashSheetName && bmDashSheetName !== aersSheetName) {
+    const knownOfficers = new Map<string, { officer: string; role: string }>();
+    for (const rec of baseResult.records) {
+      const off = getOfficerByOfficeType(rec);
+      if (!off || off === 'Unassigned') continue;
+      const role = isMarketingOfficeType(rec.officeType) ? 'MO' : 'RO';
+      knownOfficers.set(off.toLowerCase(), { officer: off, role });
+    }
+    const bmRows = XLSX.utils.sheet_to_json<unknown[]>(
+      workbook.Sheets[bmDashSheetName],
+      { header: 1, defval: '', blankrows: false },
+    );
+    bmDashboardBelowThree = parseBmDashboardBelowThree(
+      bmRows,
+      bmDashSheetName,
+      knownOfficers,
+    );
+  }
+
+  return applyStrictNplUniverseFilter(
+    baseResult,
+    mrpMap,
+    watchlistImports,
+    bmDashboardBelowThree,
+  );
 }
 
 export function parseAersPastedText(
@@ -2840,6 +3300,7 @@ export function extractBelowOneQuickWins(
 export function computeBelowThreeCollectionSnapshot(
   records: AersRecord[],
   maxStoredContracts = 1500,
+  bmDashboardBelowThree?: BmDashboardBelowThreeExtracted,
 ): BelowThreeCollectionSnapshot {
   const below3 = records.filter((r) => (Number(r.currentAge) || 0) < 3.0);
 
@@ -2930,7 +3391,7 @@ export function computeBelowThreeCollectionSnapshot(
   for (const r of below3) {
     const currentAge = Number(r.currentAge) || 0;
     const opAge = Number(r.opAge) || 0;
-    const due = Math.max(0, Number(r.currentMonthDue || r.dueBudgetMonth) || 0);
+    const due = Math.max(0, Number(r.dueBudgetMonth || r.currentMonthDue) || 0);
     const coll = Math.max(0, Number(r.totalCollection) || 0);
     const isPaid = coll > 0;
     const isFullPaid = due > 0 ? coll >= due : isPaid;
@@ -3045,65 +3506,123 @@ export function computeBelowThreeCollectionSnapshot(
       b.dueAmount > 0 ? Math.round((b.collectedAmount / b.dueAmount) * 1000) / 10 : 0;
   }
 
+  const bmOfficerLookup = new Map<
+    string,
+    BmDashboardBelowThreeExtracted['byOfficer'][number]
+  >();
+  if (bmDashboardBelowThree?.byOfficer?.length) {
+    for (const row of bmDashboardBelowThree.byOfficer) {
+      bmOfficerLookup.set(row.officer.toLowerCase(), row);
+    }
+  }
+
+  let bmOfficerMatchCount = 0;
   const byOfficer: BelowThreeOfficerRow[] = Array.from(officerMap.values())
     .map((o) => {
-      const variance = o.collectedAmount - o.dueAmount;
+      const bmOff = bmOfficerLookup.get(o.officer.toLowerCase());
+      const effectiveDue = bmOff ? bmOff.targetAmount : o.dueAmount;
+      const effectiveColl = bmOff ? bmOff.collectedAmount : o.collectedAmount;
+      const effectiveTotalCount = bmOff?.totalCount ?? o.totalCount;
+      const effectivePaidCount = bmOff?.paidCount ?? o.paidCount;
+      const effectiveNotPaidCount =
+        bmOff?.notPaidCount ??
+        (bmOff?.paidCount !== undefined
+          ? Math.max(0, effectiveTotalCount - bmOff.paidCount)
+          : o.notPaidCount);
+      if (bmOff) bmOfficerMatchCount += 1;
+
+      const variance = effectiveColl - effectiveDue;
       const shortfall = Math.max(0, -variance);
       const avgDuePerUnpaid =
         o.unpaidWithDueCount > 0
           ? o.unpaidDueSum / o.unpaidWithDueCount
-          : o.totalCount > 0
-            ? o.dueAmount / o.totalCount
+          : effectiveTotalCount > 0
+            ? effectiveDue / effectiveTotalCount
             : 0;
       const contractsNeededAgainstDue =
-        shortfall <= 0
-          ? 0
-          : avgDuePerUnpaid > 0
-            ? Math.min(
-                o.notPaidCount + o.partialPaidCount,
-                Math.ceil(shortfall / avgDuePerUnpaid),
-              )
-            : o.unpaidWithDueCount;
+        bmOff?.contractsNeeded !== undefined
+          ? bmOff.contractsNeeded
+          : shortfall <= 0
+            ? 0
+            : avgDuePerUnpaid > 0
+              ? Math.min(
+                  Math.max(effectiveNotPaidCount + o.partialPaidCount, 1),
+                  Math.ceil(shortfall / avgDuePerUnpaid),
+                )
+              : o.unpaidWithDueCount;
 
       return {
         officer: o.officer,
-        role: o.role,
-        totalCount: o.totalCount,
-        paidCount: o.paidCount,
-        notPaidCount: o.notPaidCount,
+        role: bmOff?.role || o.role,
+        totalCount: effectiveTotalCount,
+        paidCount: effectivePaidCount,
+        notPaidCount: effectiveNotPaidCount,
         paidRatioPct:
-          o.totalCount > 0 ? Math.round((o.paidCount / o.totalCount) * 1000) / 10 : 0,
+          effectiveTotalCount > 0
+            ? Math.round((effectivePaidCount / effectiveTotalCount) * 1000) / 10
+            : 0,
         partialPaidCount: o.partialPaidCount,
         unpaidWithDueCount: o.unpaidWithDueCount,
         contractsNeededAgainstDue,
-        dueAmount: Math.round(o.dueAmount),
-        collectedAmount: Math.round(o.collectedAmount),
+        dueAmount: Math.round(effectiveDue),
+        collectedAmount: Math.round(effectiveColl),
         varianceAmount: Math.round(variance),
         collectionPct:
-          o.dueAmount > 0 ? Math.round((o.collectedAmount / o.dueAmount) * 1000) / 10 : 0,
+          bmOff && bmOff.collectionPct > 0
+            ? bmOff.collectionPct
+            : effectiveDue > 0
+              ? Math.round((effectiveColl / effectiveDue) * 1000) / 10
+              : 0,
         avgDuePerUnpaid: Math.round(avgDuePerUnpaid),
         subBuckets: o.subBuckets,
+        fromBmSheet: Boolean(bmOff),
       };
     })
     .sort((a, b) => a.varianceAmount - b.varianceAmount);
 
-  const totalVariance = totalCollected - totalDue;
-  const totalShortfall = Math.max(0, -totalVariance);
+  const hasBmSheet = Boolean(
+    bmDashboardBelowThree && bmDashboardBelowThree.targetAmount >= 100_000,
+  );
+  const finalDue = hasBmSheet
+    ? bmDashboardBelowThree!.targetAmount
+    : Math.round(totalDue);
+  const finalCollected = hasBmSheet
+    ? bmDashboardBelowThree!.collectedAmount
+    : Math.round(totalCollected);
+  const finalVariance = Math.round(finalCollected - finalDue);
+  const finalCollPct =
+    hasBmSheet && bmDashboardBelowThree!.collectionPct > 0
+      ? bmDashboardBelowThree!.collectionPct
+      : finalDue > 0
+        ? Math.round((finalCollected / finalDue) * 1000) / 10
+        : 0;
+
+  const finalTotalCount = bmDashboardBelowThree?.totalCount ?? below3.length;
+  const finalPaidCount = bmDashboardBelowThree?.paidCount ?? totalPaid;
+  const finalNotPaidCount =
+    bmDashboardBelowThree?.notPaidCount ??
+    (bmDashboardBelowThree?.paidCount !== undefined
+      ? Math.max(0, finalTotalCount - bmDashboardBelowThree.paidCount)
+      : totalNotPaid);
+
+  const totalShortfall = Math.max(0, -finalVariance);
   const avgBranchDue =
     totalUnpaidWithDue > 0
       ? totalUnpaidDueSum / totalUnpaidWithDue
-      : below3.length > 0
-        ? totalDue / below3.length
+      : finalTotalCount > 0
+        ? finalDue / finalTotalCount
         : 0;
   const totalContractsNeeded =
-    totalShortfall <= 0
-      ? 0
-      : avgBranchDue > 0
-        ? Math.min(
-            totalNotPaid + totalPartialPaid,
-            Math.ceil(totalShortfall / avgBranchDue),
-          )
-        : totalUnpaidWithDue;
+    bmDashboardBelowThree?.contractsNeeded !== undefined
+      ? bmDashboardBelowThree.contractsNeeded
+      : totalShortfall <= 0
+        ? 0
+        : avgBranchDue > 0
+          ? Math.min(
+              Math.max(finalNotPaidCount + totalPartialPaid, 1),
+              Math.ceil(totalShortfall / avgBranchDue),
+            )
+          : totalUnpaidWithDue;
 
   // Sort contracts so highest-priority Not Paid (with largest due & closest to 3.0 age) appear first
   allContractItems.sort((a, b) => {
@@ -3122,22 +3641,283 @@ export function computeBelowThreeCollectionSnapshot(
       : allContractItems;
 
   return {
-    totalCount: below3.length,
-    paidCount: totalPaid,
-    notPaidCount: totalNotPaid,
+    source: hasBmSheet ? 'bm_dashboard_sheet' : 'full_aers_workbook',
+    bmSheetName: bmDashboardBelowThree?.sheetName,
+    bmSheetTargetAmount: bmDashboardBelowThree?.targetAmount,
+    bmSheetCollectedAmount: bmDashboardBelowThree?.collectedAmount,
+    bmSheetVarianceAmount: bmDashboardBelowThree?.varianceAmount,
+    bmSheetCollectionPct: bmDashboardBelowThree?.collectionPct,
+    bmSheetOfficerMatchCount: bmOfficerMatchCount,
+    aersDueAmount: Math.round(totalDue),
+    aersCollectedAmount: Math.round(totalCollected),
+    isEstimatedPaidSplit: false,
+    totalCount: finalTotalCount,
+    paidCount: finalPaidCount,
+    notPaidCount: finalNotPaidCount,
     paidRatioPct:
-      below3.length > 0 ? Math.round((totalPaid / below3.length) * 1000) / 10 : 0,
+      finalTotalCount > 0
+        ? Math.round((finalPaidCount / finalTotalCount) * 1000) / 10
+        : 0,
     partialPaidCount: totalPartialPaid,
     unpaidWithDueCount: totalUnpaidWithDue,
     contractsNeededAgainstDue: totalContractsNeeded,
-    dueAmount: Math.round(totalDue),
-    collectedAmount: Math.round(totalCollected),
-    varianceAmount: Math.round(totalVariance),
-    collectionPct:
-      totalDue > 0 ? Math.round((totalCollected / totalDue) * 1000) / 10 : 0,
+    dueAmount: finalDue,
+    collectedAmount: finalCollected,
+    varianceAmount: finalVariance,
+    collectionPct: finalCollPct,
     subBuckets,
     byOfficer,
     contracts: storedContracts,
+  };
+}
+
+/**
+ * Reconciles accurate full-branch Below-3 (< 3.00) figures even on legacy snapshots
+ * that don't yet have `bmBranchSnapshot.belowThreeSummary` stored:
+ * Because ALL age >= 3.00 (NPL 3+) accounts exist in `aersRecords`, subtracting each
+ * officer's >= 3.00 accounts from `bmBranchSnapshot.roPerformance + moPerformance`
+ * yields the exact Full-Branch Below-3 Count, Monthly Due, Collected, and Variance.
+ */
+export function reconcileBelowThreeFromBmSnapshot(
+  aersRecords: AersRecord[],
+  bmBranchSnapshot?: AersMetadata['bmBranchSnapshot'],
+): BelowThreeCollectionSnapshot {
+  const base = computeBelowThreeCollectionSnapshot(aersRecords, 2000);
+  if (
+    !bmBranchSnapshot ||
+    (!bmBranchSnapshot.roPerformance?.length &&
+      !bmBranchSnapshot.moPerformance?.length)
+  ) {
+    return { ...base, source: 'filtered_aers' };
+  }
+
+  const allBmOfficers = [
+    ...(bmBranchSnapshot.roPerformance || []),
+    ...(bmBranchSnapshot.moPerformance || []),
+  ];
+
+  // Aggregate exact >= 3.00 accounts per officer from loaded aersRecords
+  const age3PlusByOff = new Map<
+    string,
+    { count: number; due: number; coll: number }
+  >();
+  const aersB3ByOff = new Map<
+    string,
+    {
+      count: number;
+      paid: number;
+      notPaid: number;
+      partial: number;
+      unpaidWithDue: number;
+      unpaidDueSum: number;
+      due: number;
+      coll: number;
+      subBuckets: BelowThreeOfficerRow['subBuckets'];
+    }
+  >();
+
+  for (const r of aersRecords) {
+    const off = getOfficerByOfficeType(r);
+    const due = Math.max(0, Number(r.dueBudgetMonth || r.currentMonthDue) || 0);
+    const coll = Math.max(0, Number(r.totalCollection) || 0);
+    const age = Number(r.currentAge) || 0;
+    if (age >= 3.0) {
+      const cur = age3PlusByOff.get(off) ?? { count: 0, due: 0, coll: 0 };
+      cur.count += 1;
+      cur.due += due;
+      cur.coll += coll;
+      age3PlusByOff.set(off, cur);
+    } else {
+      const cur = aersB3ByOff.get(off) ?? {
+        count: 0,
+        paid: 0,
+        notPaid: 0,
+        partial: 0,
+        unpaidWithDue: 0,
+        unpaidDueSum: 0,
+        due: 0,
+        coll: 0,
+        subBuckets: {
+          below1: { total: 0, paid: 0, notPaid: 0 },
+          age1to2: { total: 0, paid: 0, notPaid: 0 },
+          age2to3: { total: 0, paid: 0, notPaid: 0 },
+        },
+      };
+      const isPaid = coll > 0;
+      const isPartial = isPaid && due > 0 && coll < due;
+      cur.count += 1;
+      cur.due += due;
+      cur.coll += coll;
+      if (isPaid) {
+        cur.paid += 1;
+        if (isPartial) cur.partial += 1;
+      } else {
+        cur.notPaid += 1;
+        if (due > 0) {
+          cur.unpaidWithDue += 1;
+          cur.unpaidDueSum += due;
+        }
+      }
+      const sub =
+        age <= 1.0
+          ? cur.subBuckets.below1
+          : age < 2.0
+            ? cur.subBuckets.age1to2
+            : cur.subBuckets.age2to3;
+      sub.total += 1;
+      if (isPaid) sub.paid += 1;
+      else sub.notPaid += 1;
+      aersB3ByOff.set(off, cur);
+    }
+  }
+
+  let totalCount = 0;
+  let totalPaid = 0;
+  let totalNotPaid = 0;
+  let totalPartial = 0;
+  let totalUnpaidWithDue = 0;
+  let totalDue = 0;
+  let totalCollected = 0;
+  let totalNeeded = 0;
+
+  const byOfficer: BelowThreeOfficerRow[] = allBmOfficers
+    .map((bmOff) => {
+      const s3 = age3PlusByOff.get(bmOff.officer) ?? { count: 0, due: 0, coll: 0 };
+      const sb3 = aersB3ByOff.get(bmOff.officer);
+      const b3Total = Math.max(0, bmOff.totalCount - s3.count);
+      const b3Due = Math.max(0, Math.round(bmOff.dueBudget - s3.due));
+      const b3Coll = Math.max(0, Math.round(bmOff.totalCollection - s3.coll));
+      const variance = b3Coll - b3Due;
+      const collPct =
+        b3Due > 0 ? Math.round((b3Coll / b3Due) * 1000) / 10 : 0;
+
+      // Exact counts for indexed AERS <3 + ratio-reconciled split for excluded regular (<1) accounts
+      const indexedCnt = sb3?.count ?? 0;
+      const indexedPaid = sb3?.paid ?? 0;
+      const indexedNotPaid = sb3?.notPaid ?? 0;
+      const indexedDue = sb3?.due ?? 0;
+      const indexedColl = sb3?.coll ?? 0;
+
+      const excludedRegCnt = Math.max(0, b3Total - indexedCnt);
+      const excludedDue = Math.max(0, b3Due - indexedDue);
+      const excludedColl = Math.max(0, b3Coll - indexedColl);
+      const estRegPaidRatio =
+        excludedDue > 0 ? Math.min(1, Math.max(0, excludedColl / excludedDue)) : 1;
+      const estRegPaid = Math.min(
+        excludedRegCnt,
+        Math.round(excludedRegCnt * estRegPaidRatio),
+      );
+      const estRegNotPaid = Math.max(0, excludedRegCnt - estRegPaid);
+
+      const paidCount = indexedPaid + estRegPaid;
+      const notPaidCount = indexedNotPaid + estRegNotPaid;
+      const partialPaidCount = sb3?.partial ?? 0;
+      const unpaidWithDueCount = (sb3?.unpaidWithDue ?? 0) + estRegNotPaid;
+
+      const avgDue = b3Total > 0 ? b3Due / b3Total : 0;
+      const shortfall = Math.max(0, -variance);
+      const contractsNeededAgainstDue =
+        shortfall <= 0
+          ? 0
+          : avgDue > 0
+            ? Math.min(b3Total, Math.ceil(shortfall / avgDue))
+            : unpaidWithDueCount;
+
+      totalCount += b3Total;
+      totalPaid += paidCount;
+      totalNotPaid += notPaidCount;
+      totalPartial += partialPaidCount;
+      totalUnpaidWithDue += unpaidWithDueCount;
+      totalDue += b3Due;
+      totalCollected += b3Coll;
+      totalNeeded += contractsNeededAgainstDue;
+
+      const subBuckets = sb3
+        ? {
+            below1: {
+              total: sb3.subBuckets.below1.total + excludedRegCnt,
+              paid: sb3.subBuckets.below1.paid + estRegPaid,
+              notPaid: sb3.subBuckets.below1.notPaid + estRegNotPaid,
+            },
+            age1to2: sb3.subBuckets.age1to2,
+            age2to3: sb3.subBuckets.age2to3,
+          }
+        : {
+            below1: { total: excludedRegCnt, paid: estRegPaid, notPaid: estRegNotPaid },
+            age1to2: { total: 0, paid: 0, notPaid: 0 },
+            age2to3: { total: 0, paid: 0, notPaid: 0 },
+          };
+
+      return {
+        officer: bmOff.officer,
+        role: bmOff.role,
+        totalCount: b3Total,
+        paidCount,
+        notPaidCount,
+        paidRatioPct:
+          b3Total > 0 ? Math.round((paidCount / b3Total) * 1000) / 10 : 0,
+        partialPaidCount,
+        unpaidWithDueCount,
+        contractsNeededAgainstDue,
+        dueAmount: b3Due,
+        collectedAmount: b3Coll,
+        varianceAmount: variance,
+        collectionPct: collPct,
+        avgDuePerUnpaid: Math.round(avgDue),
+        subBuckets,
+      };
+    })
+    .sort((a, b) => a.varianceAmount - b.varianceAmount);
+
+  // Align sub-buckets [A]..[D] with exact BM ageBuckets counts when available
+  const bmBuckets = bmBranchSnapshot.ageBuckets || [];
+  const subBuckets: BelowThreeSubBucket[] = base.subBuckets.map((sb, idx) => {
+    const bmB = bmBuckets[idx];
+    if (!bmB) return sb;
+    const extraCount = Math.max(0, bmB.count - sb.totalCount);
+    const branchCollRatio = totalDue > 0 ? Math.min(1, totalCollected / totalDue) : 0.78;
+    const estExtraPaid = Math.round(extraCount * branchCollRatio);
+    const estExtraNotPaid = extraCount - estExtraPaid;
+    const nextTotal = bmB.count;
+    const nextPaid = sb.paidCount + estExtraPaid;
+    const nextNotPaid = Math.max(0, nextTotal - nextPaid);
+    return {
+      ...sb,
+      totalCount: nextTotal,
+      paidCount: nextPaid,
+      notPaidCount: nextNotPaid,
+      paidPct: nextTotal > 0 ? Math.round((nextPaid / nextTotal) * 1000) / 10 : 0,
+      collectionPct:
+        sb.dueAmount > 0 && extraCount === 0
+          ? sb.collectionPct
+          : Math.round(branchCollRatio * 1000) / 10,
+    };
+  });
+
+  const totalVariance = totalCollected - totalDue;
+  const totalCollPct =
+    totalDue > 0 ? Math.round((totalCollected / totalDue) * 1000) / 10 : 0;
+
+  return {
+    source: 'bm_reconciled_snapshot',
+    aersDueAmount: totalDue,
+    aersCollectedAmount: totalCollected,
+    isEstimatedPaidSplit: true,
+    totalCount,
+    paidCount: totalPaid,
+    notPaidCount: totalNotPaid,
+    paidRatioPct:
+      totalCount > 0 ? Math.round((totalPaid / totalCount) * 1000) / 10 : 0,
+    partialPaidCount: totalPartial,
+    unpaidWithDueCount: totalUnpaidWithDue,
+    contractsNeededAgainstDue: totalNeeded,
+    dueAmount: totalDue,
+    collectedAmount: totalCollected,
+    varianceAmount: totalVariance,
+    collectionPct: totalCollPct,
+    subBuckets,
+    byOfficer,
+    contracts: base.contracts,
   };
 }
 

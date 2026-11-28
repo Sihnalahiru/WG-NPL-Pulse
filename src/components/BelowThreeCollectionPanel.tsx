@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowDownRight,
@@ -6,11 +6,13 @@ import {
   Banknote,
   CheckCircle2,
   Clock,
+  FileSpreadsheet,
   Info,
   Layers,
   PhoneCall,
   Search,
   TrendingUp,
+  Upload,
   Users,
   X,
 } from 'lucide-react';
@@ -36,10 +38,10 @@ import type {
   MrpEnrichment,
 } from '../types/recovery';
 import {
-  computeBelowThreeCollectionSnapshot,
   formatCompactRs,
   formatCurrencyRs,
   normalizeContractNo,
+  reconcileBelowThreeFromBmSnapshot,
 } from '../utils/recoveryEngine';
 import { PaymentPatternStrip } from './PaymentPatternStrip';
 import { UserAvatar } from './UserAvatar';
@@ -49,6 +51,8 @@ interface BelowThreeCollectionPanelProps {
   aersMeta: AersMetadata | null;
   mrpMap?: Map<string, MrpEnrichment>;
   isDark: boolean;
+  isAdmin?: boolean;
+  onUploadWorkbook?: (file: File) => void;
 }
 
 export function BelowThreeCollectionPanel({
@@ -56,6 +60,8 @@ export function BelowThreeCollectionPanel({
   aersMeta,
   mrpMap,
   isDark,
+  isAdmin,
+  onUploadWorkbook,
 }: BelowThreeCollectionPanelProps) {
   const [selectedOfficer, setSelectedOfficer] = useState<string>('ALL');
   const [chartMode, setChartMode] = useState<'amount' | 'contracts'>('amount');
@@ -63,29 +69,22 @@ export function BelowThreeCollectionPanel({
   const [ageBandFilter, setAgeBandFilter] = useState<'all' | 'below1' | 'age1to2' | 'age2to3'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [visibleLimit, setVisibleLimit] = useState(30);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const bm = aersMeta?.bmBranchSnapshot;
-  const usingFullWorkbookSnapshot = Boolean(bm?.belowThreeSummary && bm.belowThreeSummary.totalCount > 0);
 
-  // Full Below-3 dataset: prefer full workbook snapshot (captures all <3.00 accounts including regular performing),
-  // otherwise compute live from loaded AERS records (<3.00 age)
+  // Full Below-3 dataset:
+  // 1) Prefer stored `bmBranchSnapshot.belowThreeSummary` (parsed directly from BM Dashboard sheet + full AERS workbook)
+  // 2) Otherwise reconcile mathematically from `bmBranchSnapshot.roPerformance + moPerformance` minus exact >=3.00 AERS rows
   const snapshot = useMemo<BelowThreeCollectionSnapshot>(() => {
     if (bm?.belowThreeSummary && bm.belowThreeSummary.totalCount > 0) {
       return bm.belowThreeSummary;
     }
-    return computeBelowThreeCollectionSnapshot(aersRecords, 2000);
+    return reconcileBelowThreeFromBmSnapshot(aersRecords, bm);
   }, [bm, aersRecords]);
 
-  // If using legacy pre-upload snapshot, show full BM age-bucket Below-3 count context ([A]+[B]+[C]+[D])
-  const fullBranchBmBelow3Count = useMemo(() => {
-    if (!bm?.ageBuckets || bm.ageBuckets.length < 4) return null;
-    return (
-      (bm.ageBuckets[0]?.count || 0) +
-      (bm.ageBuckets[1]?.count || 0) +
-      (bm.ageBuckets[2]?.count || 0) +
-      (bm.ageBuckets[3]?.count || 0)
-    );
-  }, [bm]);
+  const isFromBmDashboardSheet = snapshot.source === 'bm_dashboard_sheet';
+  const isBmReconciledSnapshot = snapshot.source === 'bm_reconciled_snapshot';
 
   // Scoped metrics when an individual officer is selected vs Branch Total
   const activeOfficerRow = useMemo(() => {
@@ -126,13 +125,13 @@ export function BelowThreeCollectionPanel({
     };
   }, [activeOfficerRow, snapshot]);
 
-  // Chart data per officer
+  // Chart data per officer (use Rs. Millions for clean branch-scale readability)
   const officerChartData = useMemo(() => {
     return snapshot.byOfficer.map((o) => ({
       officer: o.officer,
-      dueK: Number((o.dueAmount / 1000).toFixed(1)),
-      collectedK: Number((o.collectedAmount / 1000).toFixed(1)),
-      varianceK: Number((o.varianceAmount / 1000).toFixed(1)),
+      dueM: Number((o.dueAmount / 1_000_000).toFixed(2)),
+      collectedM: Number((o.collectedAmount / 1_000_000).toFixed(2)),
+      varianceM: Number((o.varianceAmount / 1_000_000).toFixed(2)),
       collectionPct: o.collectionPct,
       paidCount: o.paidCount,
       notPaidCount: o.notPaidCount,
@@ -244,17 +243,76 @@ export function BelowThreeCollectionPanel({
         </div>
       </section>
 
-      {/* Context Notice when viewing pre-upgrade snapshot without full workbook Below-3 breakdown */}
-      {!usingFullWorkbookSnapshot && fullBranchBmBelow3Count !== null && fullBranchBmBelow3Count > snapshot.totalCount && (
-        <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl bg-amber-50 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-800/70 text-xs text-amber-900 dark:text-amber-200">
-          <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
-          <div>
-            <strong>Full-Workbook Sync Tip:</strong> Your BM Snapshot shows{' '}
-            <strong className="font-mono">{fullBranchBmBelow3Count.toLocaleString()}</strong> total Below-3 accounts across the entire branch (including regular &lt;2.00 accounts), while{' '}
-            <strong className="font-mono">{snapshot.totalCount.toLocaleString()}</strong> active AERS accounts are currently indexed below. Re-upload the original Excel file once in Admin Mode to lock exact Paid / Not-Paid counts for all{' '}
-            <strong className="font-mono">{fullBranchBmBelow3Count.toLocaleString()}</strong> Below-3 contracts!
+      {/* BM Dashboard Sheet Sync & Source Status Strip */}
+      {isFromBmDashboardSheet ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/35 border border-emerald-200 dark:border-emerald-800/70 text-xs text-emerald-900 dark:text-emerald-200">
+          <div className="flex items-start gap-2.5">
+            <FileSpreadsheet className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+            <div>
+              <strong>Synced directly from &ldquo;{snapshot.bmSheetName || 'BM Dashboard'}&rdquo; Sheet:</strong>{' '}
+              Target <strong className="font-mono">{formatCompactRs(snapshot.dueAmount)}</strong> · Collected{' '}
+              <strong className="font-mono">{formatCompactRs(snapshot.collectedAmount)}</strong> ({snapshot.collectionPct.toFixed(1)}%)
+              {snapshot.aersDueAmount && snapshot.aersDueAmount !== snapshot.dueAmount ? (
+                <span className="ml-2 text-emerald-700/80 dark:text-emerald-300/80">
+                  (AERS &lt;3.00 Due Budget: {formatCompactRs(snapshot.aersDueAmount)} · Coll: {formatCompactRs(snapshot.aersCollectedAmount || 0)})
+                </span>
+              ) : null}
+            </div>
           </div>
+          {onUploadWorkbook && (
+            <button
+              type="button"
+              onClick={() => uploadInputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-semibold text-[11px] transition-colors shrink-0"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              Re-Sync Excel
+            </button>
+          )}
         </div>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl bg-amber-50 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-800/70 text-xs text-amber-900 dark:text-amber-200">
+          <div className="flex items-start gap-2.5 max-w-4xl">
+            <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+            <div>
+              <strong>
+                {isBmReconciledSnapshot
+                  ? `BM Branch Portfolio Reconciled (All ${snapshot.totalCount.toLocaleString()} Below-3 Accounts):`
+                  : 'Sync Exact BM Dashboard Sheet:'}
+              </strong>{' '}
+              Showing exact Full-Branch Below-3 Due Budget ({formatCompactRs(snapshot.dueAmount)}) &amp; Collection ({formatCompactRs(snapshot.collectedAmount)}) across{' '}
+              <strong className="font-mono">{snapshot.totalCount.toLocaleString()}</strong> contracts. Upload your{' '}
+              <strong className="font-mono">WG_MRP</strong> Excel file once to pull the exact{' '}
+              <strong>BM Dashboard sheet</strong> Below-3 Target (e.g. Rs. 32M+) &amp; exact contract-level Paid / Not-Paid counts directly from the worksheet.
+            </div>
+          </div>
+          {onUploadWorkbook && (
+            <button
+              type="button"
+              onClick={() => uploadInputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-red-700 hover:bg-red-800 text-white font-semibold text-[11px] shadow-xs transition-colors shrink-0"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              {isAdmin ? 'Sync BM Dashboard Excel' : 'Unlock Admin & Sync Excel'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {onUploadWorkbook && (
+        <input
+          ref={uploadInputRef}
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              onUploadWorkbook(file);
+              e.target.value = '';
+            }
+          }}
+        />
       )}
 
       {/* 4 Executive KPI Cards */}
@@ -289,10 +347,14 @@ export function BelowThreeCollectionPanel({
           </div>
         </div>
 
-        {/* Card 2: Monthly Due vs Collected */}
+        {/* Card 2: Monthly Target / Due vs Collected */}
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5">
           <div className="flex items-center justify-between gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-            <span>Below-3 Collection vs. Monthly Due</span>
+            <span>
+              {isFromBmDashboardSheet
+                ? 'BM Sheet Below-3 Coll vs. Target'
+                : 'Below-3 Collection vs. Monthly Due'}
+            </span>
             <TrendingUp className="w-4 h-4 text-red-700 dark:text-red-400 shrink-0" />
           </div>
           <div className="mt-2 flex items-baseline gap-2">
@@ -316,7 +378,8 @@ export function BelowThreeCollectionPanel({
             />
           </div>
           <div className="mt-2 text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
-            Monthly Due: <strong className="text-zinc-800 dark:text-zinc-200">{formatCompactRs(activeTotals.dueAmount)}</strong>
+            {isFromBmDashboardSheet ? 'BM Target:' : 'Monthly Due:'}{' '}
+            <strong className="text-zinc-800 dark:text-zinc-200">{formatCompactRs(activeTotals.dueAmount)}</strong>
           </div>
         </div>
 
@@ -393,7 +456,7 @@ export function BelowThreeCollectionPanel({
               </h3>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
                 {chartMode === 'amount'
-                  ? 'Monthly Due vs. Collected (Rs. Thousands) and Collection % achievement per officer'
+                  ? 'Monthly Due / Target vs. Collected (Rs. Millions) and Collection % achievement per officer'
                   : 'Paid vs. Not Paid Below-3 contracts this month per officer'}
               </p>
             </div>
@@ -412,7 +475,7 @@ export function BelowThreeCollectionPanel({
                     : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
                 }`}
               >
-                Due vs Coll (Rs.)
+                Due vs Coll (Rs. M)
               </button>
               <button
                 type="button"
@@ -452,7 +515,7 @@ export function BelowThreeCollectionPanel({
                       tick={{ fill: axisColor, fontSize: 11 }}
                       axisLine={false}
                       tickLine={false}
-                      tickFormatter={(v) => `${v}k`}
+                      tickFormatter={(v) => `${v}M`}
                     />
                     <YAxis
                       yAxisId="right"
@@ -473,21 +536,21 @@ export function BelowThreeCollectionPanel({
                       formatter={(value: unknown, name: unknown) => {
                         const label = String(name);
                         if (label.includes('%')) return [`${Number(value || 0)}%`, label];
-                        return [`Rs. ${Number(value || 0).toLocaleString()}k`, label];
+                        return [`Rs. ${Number(value || 0).toFixed(2)}M`, label];
                       }}
                     />
                     <Legend wrapperStyle={{ fontSize: '12px' }} />
                     <Bar
                       yAxisId="left"
-                      dataKey="dueK"
-                      name="Monthly Due (k)"
+                      dataKey="dueM"
+                      name="Monthly Target / Due (M)"
                       fill={isDark ? '#52525b' : '#a1a1aa'}
                       radius={[4, 4, 0, 0]}
                     />
                     <Bar
                       yAxisId="left"
-                      dataKey="collectedK"
-                      name="Collected (k)"
+                      dataKey="collectedM"
+                      name="Collected (M)"
                       fill="#059669"
                       radius={[4, 4, 0, 0]}
                     />

@@ -137,6 +137,7 @@ export interface BelowThreeOfficerRow {
     age1to2: { total: number; paid: number; notPaid: number };
     age2to3: { total: number; paid: number; notPaid: number };
   };
+  fromBmSheet?: boolean;
 }
 
 export interface BelowThreeContractItem {
@@ -160,7 +161,45 @@ export interface BelowThreeContractItem {
   nextDueDate: string;
 }
 
+export interface BmDashboardBelowThreeExtracted {
+  sheetName: string;
+  targetAmount: number;
+  collectedAmount: number;
+  varianceAmount: number;
+  collectionPct: number;
+  totalCount?: number;
+  paidCount?: number;
+  notPaidCount?: number;
+  contractsNeeded?: number;
+  byOfficer: {
+    officer: string;
+    role?: string;
+    targetAmount: number;
+    collectedAmount: number;
+    varianceAmount: number;
+    collectionPct: number;
+    totalCount?: number;
+    paidCount?: number;
+    notPaidCount?: number;
+    contractsNeeded?: number;
+  }[];
+}
+
 export interface BelowThreeCollectionSnapshot {
+  source?:
+    | 'bm_dashboard_sheet'
+    | 'full_aers_workbook'
+    | 'bm_reconciled_snapshot'
+    | 'filtered_aers';
+  bmSheetName?: string;
+  bmSheetTargetAmount?: number;
+  bmSheetCollectedAmount?: number;
+  bmSheetVarianceAmount?: number;
+  bmSheetCollectionPct?: number;
+  bmSheetOfficerMatchCount?: number;
+  aersDueAmount?: number;
+  aersCollectedAmount?: number;
+  isEstimatedPaidSplit?: boolean;
   totalCount: number;
   paidCount: number;
   notPaidCount: number;
