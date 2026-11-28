@@ -197,29 +197,23 @@ const LanguageContext = createContext<LanguageContextValue>({
 });
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [lang, setLangState] = useState<AppLanguage>(() => {
-    try {
-      const saved = localStorage.getItem(LANG_STORAGE_KEY);
-      if (saved === 'en' || saved === 'si' || saved === 'ta') return saved;
-    } catch {
-      // Ignore
-    }
-    return 'en';
-  });
+  const [lang] = useState<AppLanguage>('en');
 
   useEffect(() => {
-    document.documentElement.lang = lang;
+    document.documentElement.lang = 'en';
     try {
-      localStorage.setItem(LANG_STORAGE_KEY, lang);
+      localStorage.setItem(LANG_STORAGE_KEY, 'en');
     } catch {
       // Ignore
     }
-  }, [lang]);
+  }, []);
 
-  const setLang = (next: AppLanguage) => setLangState(next);
+  const setLang = (_next: AppLanguage) => {
+    // Language toggle removed per corporate standard (English only)
+  };
 
   const t = (key: string): string => {
-    return TRANSLATIONS[lang][key] ?? TRANSLATIONS.en[key] ?? key;
+    return TRANSLATIONS.en[key] ?? key;
   };
 
   return (

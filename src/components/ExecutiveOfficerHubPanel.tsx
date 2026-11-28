@@ -38,9 +38,10 @@ import {
   extractBelowOneQuickWins,
   formatCompactRs,
   formatCurrencyRs,
+  getBranchPortfolioTotals,
+  getNormalizedOfficerRole,
   getOfficerByOfficeType,
   getTodayISO,
-  isMarketingOfficeType,
   isWorstCategory,
   normalizeContractNo,
   normalizeEvaluableFromAers,
@@ -167,6 +168,9 @@ export function ExecutiveOfficerHubPanel({
   // Campaign state (Tab 3)
   const [selectedCampaignMonth, setSelectedCampaignMonth] = useState<string>('ALL');
 
+  // RO / MO role filter for Tab 1 officer cards
+  const [officerRoleFilter, setOfficerRoleFilter] = useState<'ALL' | 'RO' | 'MO'>('ALL');
+
   const safeAers = useMemo(() => {
     return asArray<AersRecord>(aersRecords)
       .filter((r) => r && typeof r === 'object' && !Array.isArray(r))
@@ -258,79 +262,172 @@ export function ExecutiveOfficerHubPanel({
     }
   }, [evaluableItems, safeBaseline]);
 
-  const bmRatioByOfficer = useMemo(() => {
-    const map = new Map<string, { ratio90Pct: number; belowOneCount: number; totalCount: number }>();
-    const roList = aersMeta?.bmBranchSnapshot?.roPerformance ?? [];
-    const moList = aersMeta?.bmBranchSnapshot?.moPerformance ?? [];
-    [...roList, ...moList].forEach((r) => {
-      const ratio90Pct =
-        r.ratio90Pct !== undefined
-          ? r.ratio90Pct
-          : r.totalCount > 0
-            ? (r.belowOneCount / r.totalCount) * 100
-            : 0;
-      map.set(r.officer, {
-        ratio90Pct,
-        belowOneCount: r.belowOneCount,
-        totalCount: r.totalCount,
-      });
-    });
-    return map;
-  }, [aersMeta]);
+  const branchTotals = useMemo(
+    () => getBranchPortfolioTotals(aersMeta, safeAers, 'ALL'),
+    [aersMeta, safeAers],
+  );
 
   const officerCards = useMemo(() => {
-    const officeMap = new Map<string, string>();
-    for (const item of evaluableItems) {
-      if (item && typeof item.officer === 'string' && item.officer && !officeMap.has(item.officer)) {
-        officeMap.set(item.officer, asStr(item.officeType));
-      }
+    const evalRowByKey = new Map<string, OfficerEvaluationRow>();
+    const evalRowByName = new Map<string, OfficerEvaluationRow>();
+    for (const row of officerRows) {
+      evalRowByName.set(row.officer.toLowerCase(), row);
     }
 
-    return officerRows.map((row) => {
-      const officerItems = evaluableItems.filter((i) => i && i.officer === row.officer);
-      let borderline = { totalCount: 0, totalCapitalAtRisk: 0, totalDebtorAtRisk: 0 };
-      try {
-        const res = analyzeNextMonthBorderline(officerItems);
-        if (res && typeof res === 'object') {
-          borderline = {
-            totalCount: Number(res.totalCount) || 0,
-            totalCapitalAtRisk: Number(res.totalCapitalAtRisk) || 0,
-            totalDebtorAtRisk: Number(res.totalDebtorAtRisk) || 0,
-          };
-        }
-      } catch {
-        // Fallback zeros
+    const roList = aersMeta?.bmBranchSnapshot?.roPerformance ?? [];
+    const moList = aersMeta?.bmBranchSnapshot?.moPerformance ?? [];
+    const bmOfficers = [...roList, ...moList];
+
+    // Build unified officer list: all RO & MO officers from full BM snapshot + any extra officers in evaluableItems
+    const unified = new Map<
+      string,
+      {
+        officer: string;
+        role: 'RO' | 'MO';
+        assignedTotalCount: number;
+        belowOneCount: number;
+        ratio90Pct?: number;
+        bmRow?: (typeof bmOfficers)[number];
       }
+    >();
 
-      const totalEfforts = officerItems.reduce(
-        (sum, i) => sum + (Number(i.assignOfficerEfforts) || 0),
-        0,
+    for (const bmRow of bmOfficers) {
+      const role: 'RO' | 'MO' = bmRow.role === 'MO' ? 'MO' : 'RO';
+      const key = `${role}::${bmRow.officer.toLowerCase()}`;
+      const ratio90Pct =
+        bmRow.ratio90Pct !== undefined
+          ? bmRow.ratio90Pct
+          : bmRow.totalCount > 0
+            ? Math.round((bmRow.belowOneCount / bmRow.totalCount) * 1000) / 10
+            : 0;
+      unified.set(key, {
+        officer: bmRow.officer,
+        role,
+        assignedTotalCount: bmRow.totalCount || 0,
+        belowOneCount: bmRow.belowOneCount || 0,
+        ratio90Pct,
+        bmRow,
+      });
+    }
+
+    for (const item of evaluableItems) {
+      if (!item || typeof item.officer !== 'string' || !item.officer) continue;
+      const norm = getNormalizedOfficerRole(item.officeType);
+      const role: 'RO' | 'MO' = norm === 'MO' ? 'MO' : 'RO';
+      const key = `${role}::${item.officer.toLowerCase()}`;
+      if (!unified.has(key)) {
+        const officerItems = evaluableItems.filter(
+          (i) => i && i.officer === item.officer && getNormalizedOfficerRole(i.officeType) === norm,
+        );
+        const below1 = officerItems.filter((i) => (i.currentAge || 0) <= 1.0).length;
+        unified.set(key, {
+          officer: item.officer,
+          role,
+          assignedTotalCount: officerItems.length,
+          belowOneCount: below1,
+          ratio90Pct:
+            officerItems.length > 0
+              ? Math.round((below1 / officerItems.length) * 1000) / 10
+              : 0,
+        });
+      }
+      const ev = evalRowByName.get(item.officer.toLowerCase());
+      if (ev) evalRowByKey.set(key, ev);
+    }
+
+    return Array.from(unified.entries())
+      .map(([key, entry]) => {
+        const officerItems = evaluableItems.filter(
+          (i) =>
+            i &&
+            i.officer.toLowerCase() === entry.officer.toLowerCase() &&
+            (getNormalizedOfficerRole(i.officeType) === entry.role ||
+              getNormalizedOfficerRole(i.officeType) === 'OTHER'),
+        );
+        const row = evalRowByKey.get(key) ?? evalRowByName.get(entry.officer.toLowerCase());
+
+        let borderline = { totalCount: 0, totalCapitalAtRisk: 0, totalDebtorAtRisk: 0 };
+        try {
+          const res = analyzeNextMonthBorderline(officerItems);
+          if (res && typeof res === 'object') {
+            borderline = {
+              totalCount: Number(res.totalCount) || 0,
+              totalCapitalAtRisk: Number(res.totalCapitalAtRisk) || 0,
+              totalDebtorAtRisk: Number(res.totalDebtorAtRisk) || 0,
+            };
+          }
+        } catch {
+          // Fallback zeros
+        }
+
+        const totalEfforts = officerItems.reduce(
+          (sum, i) => sum + (Number(i.assignOfficerEfforts) || 0),
+          0,
+        );
+        const contactedCount = officerItems.filter(
+          (i) => (Number(i.assignOfficerEfforts) || 0) > 0,
+        ).length;
+        const effortCoveragePct =
+          officerItems.length > 0
+            ? Math.round((contactedCount / officerItems.length) * 100)
+            : 0;
+
+        const openingNpl =
+          entry.bmRow?.opNpl !== undefined
+            ? entry.bmRow.opNpl
+            : Number(row?.openingNpl ?? 0);
+        const closingNpl =
+          entry.bmRow?.closingNpl !== undefined
+            ? entry.bmRow.closingNpl
+            : Number(row?.closingNpl ?? 0);
+        const openingNplCount =
+          entry.bmRow?.openingNplCount !== undefined
+            ? entry.bmRow.openingNplCount
+            : officerItems.filter((i) => (Number(i.opNpl) || 0) > 0).length;
+        const closingNplCount =
+          entry.bmRow?.closingNplCount !== undefined
+            ? entry.bmRow.closingNplCount
+            : officerItems.filter((i) => (Number(i.npl) || 0) > 0).length;
+
+        return {
+          officer: entry.officer,
+          openingCount: entry.assignedTotalCount,
+          closingCount: entry.assignedTotalCount,
+          assignedTotalCount: entry.assignedTotalCount,
+          belowOneCount: entry.belowOneCount,
+          openingNplCount,
+          closingNplCount,
+          openingDebtor: Number(row?.openingDebtor ?? entry.bmRow?.closingDebtor ?? 0),
+          closingDebtor: Number(entry.bmRow?.closingDebtor ?? row?.closingDebtor ?? 0),
+          openingNpl,
+          closingNpl,
+          savedCount: Number(row?.savedFromOpNplCount ?? 0),
+          savedAmount: Number(row?.savedFromOpNplAmount ?? 0),
+          newlyFallenCount: Number(row?.movedToNplCount ?? 0),
+          newlyFallenAmount: Number(row?.movedToNplAmount ?? 0),
+          netNplChange: closingNpl - openingNpl,
+          officeType: entry.role,
+          roleBadge: entry.role,
+          borderlineCount: borderline.totalCount,
+          borderlineAmount: borderline.totalCapitalAtRisk,
+          borderlineDebtor: borderline.totalDebtorAtRisk,
+          totalEfforts,
+          contactedCount,
+          effortCoveragePct,
+          ratio90Pct: entry.ratio90Pct,
+        };
+      })
+      .sort(
+        (a, b) =>
+          (a.roleBadge === b.roleBadge ? 0 : a.roleBadge === 'RO' ? -1 : 1) ||
+          b.assignedTotalCount - a.assignedTotalCount,
       );
-      const contactedCount = officerItems.filter(
-        (i) => (Number(i.assignOfficerEfforts) || 0) > 0,
-      ).length;
-      const effortCoveragePct =
-        officerItems.length > 0
-          ? Math.round((contactedCount / officerItems.length) * 100)
-          : 0;
-      const officeType = officeMap.get(row.officer) || 'RO';
-      const isMo = isMarketingOfficeType(officeType);
-      const bmRatio = bmRatioByOfficer.get(row.officer);
+  }, [evaluableItems, officerRows, aersMeta]);
 
-      return {
-        ...row,
-        officeType,
-        roleBadge: isMo ? 'MO' : 'RO',
-        borderlineCount: borderline.totalCount,
-        borderlineAmount: borderline.totalCapitalAtRisk,
-        borderlineDebtor: borderline.totalDebtorAtRisk,
-        totalEfforts,
-        contactedCount,
-        effortCoveragePct,
-        ratio90Pct: bmRatio?.ratio90Pct,
-      };
-    });
-  }, [evaluableItems, officerRows, bmRatioByOfficer]);
+  const filteredOfficerCards = useMemo(() => {
+    if (officerRoleFilter === 'ALL') return officerCards;
+    return officerCards.filter((c) => c.roleBadge === officerRoleFilter);
+  }, [officerCards, officerRoleFilter]);
 
   // ========== TAB 2: ASSIGN USER MONITOR (NO RO/MO DETAILS) ==========
   const monthOptions = useMemo(() => {
@@ -933,11 +1030,11 @@ export function ExecutiveOfficerHubPanel({
               className="px-3.5 py-2 text-xs font-semibold rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/40 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-600"
             >
               <option value="ALL">
-                All Officers — Branch Portfolio ({officerCards.length})
+                All Officers — Branch Total {branchTotals.totalContracts.toLocaleString()} Contracts ({officerCards.length} RO/MO)
               </option>
               {officerCards.map((c) => (
-                <option key={c.officer} value={c.officer}>
-                  {c.officer} ({c.officeType}) · {c.closingNplCount} NPL ·{' '}
+                <option key={`${c.roleBadge}_${c.officer}`} value={c.officer}>
+                  {c.officer} ({c.roleBadge}) · {c.assignedTotalCount.toLocaleString()} Assigned · {c.closingNplCount} NPL ·{' '}
                   {formatCompactRs(c.closingNpl)}
                 </option>
               ))}
@@ -1011,30 +1108,59 @@ export function ExecutiveOfficerHubPanel({
         </div>
       </div>
 
-      {/* TAB 1: RO / MO Profile Cards (BM-Reconciled Opening & Closing NPL + 90 Ratio) */}
+      {/* TAB 1: RO / MO Profile Cards (BM-Reconciled Assigned Contracts, Opening & Closing NPL + 90 Ratio) */}
       {activeHighlightTab === 'cards' && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-semibold text-slate-700 dark:text-slate-300">
-              Individual Officer Performance Cards (Click any card to filter dashboard)
-            </span>
-            <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
-              {officerCards.length} Active Officers
-            </span>
+        <div className="space-y-3.5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 text-xs">
+            <div className="space-y-0.5">
+              <span className="font-semibold text-slate-800 dark:text-slate-200 block">
+                Individual Officer Performance Cards (Click any card to filter dashboard)
+              </span>
+              <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400 tabular-nums">
+                Branch Portfolio: <strong className="text-slate-900 dark:text-slate-100">{branchTotals.totalContracts.toLocaleString()}</strong> contracts · RO ({branchTotals.roOfficerCount}): {branchTotals.roContractsCount.toLocaleString()} · MO ({branchTotals.moOfficerCount}): {branchTotals.moContractsCount.toLocaleString()}
+              </span>
+            </div>
+
+            <div
+              role="group"
+              aria-label="Filter officers by Office Type"
+              className="inline-flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl self-start sm:self-auto"
+            >
+              {(
+                [
+                  { id: 'ALL', label: `All (${officerCards.length})` },
+                  { id: 'RO', label: `RO · Recovery (${branchTotals.roOfficerCount || officerCards.filter((c) => c.roleBadge === 'RO').length})` },
+                  { id: 'MO', label: `MO · Marketing (${branchTotals.moOfficerCount || officerCards.filter((c) => c.roleBadge === 'MO').length})` },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setOfficerRoleFilter(tab.id)}
+                  className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                    officerRoleFilter === tab.id
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {officerCards.length === 0 ? (
+          {filteredOfficerCards.length === 0 ? (
             <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl">
               Upload an AERS/MRP Excel report to generate RO &amp; MO individual performance cards.
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {officerCards.map((card) => {
+              {filteredOfficerCards.map((card) => {
                 const isSelected = selectedOfficer === card.officer;
                 const variance = (Number(card.openingNpl) || 0) - (Number(card.closingNpl) || 0);
                 return (
                   <button
-                    key={card.officer}
+                    key={`${card.roleBadge}_${card.officer}`}
                     type="button"
                     onClick={() =>
                       onSelectOfficer(isSelected ? 'ALL' : card.officer)
@@ -1063,7 +1189,7 @@ export function ExecutiveOfficerHubPanel({
                                   : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
                               }`}
                             >
-                              {card.officeType}
+                              {card.roleBadge === 'MO' ? 'MO · Marketing' : 'RO · Recovery'}
                             </span>
                             {card.ratio90Pct !== undefined && (
                               <span className="text-[10px] font-mono font-semibold text-emerald-700 dark:text-emerald-400">
@@ -1083,6 +1209,19 @@ export function ExecutiveOfficerHubPanel({
                       >
                         {variance >= 0 ? 'Saved ' : '+'}
                         {formatCompactRs(Math.abs(variance))}
+                      </span>
+                    </div>
+
+                    {/* Assigned Portfolio Contracts Strip */}
+                    <div className="flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 text-[11px] tabular-nums">
+                      <span className="text-slate-500 dark:text-slate-400 font-medium">
+                        Assigned Contracts
+                      </span>
+                      <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
+                        {card.assignedTotalCount.toLocaleString()}{' '}
+                        <span className="font-normal text-[10px] text-emerald-700 dark:text-emerald-400">
+                          ({card.belowOneCount.toLocaleString()} ≤1)
+                        </span>
                       </span>
                     </div>
 

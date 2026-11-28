@@ -72,6 +72,7 @@ export function BelowThreeCollectionPanel({
   onUploadWorkbook,
 }: BelowThreeCollectionPanelProps) {
   const [selectedOfficer, setSelectedOfficer] = useState<string>('ALL');
+  const [roleFilter, setRoleFilter] = useState<'ALL' | 'RO' | 'MO'>('ALL');
   const [chartMode, setChartMode] = useState<'amount' | 'variance' | 'contracts'>('amount');
   const [statusFilter, setStatusFilter] = useState<'all' | 'not_paid' | 'partial' | 'paid'>('not_paid');
   const [ageBandFilter, setAgeBandFilter] = useState<'all' | 'below1' | 'age1to2' | 'age2to3'>('all');
@@ -241,6 +242,11 @@ export function BelowThreeCollectionPanel({
       })
       .sort((a, b) => a.targetVariance - b.targetVariance);
   }, [snapshot.byOfficer, snapshot.dueAmount, targetMode, activeBranchTarget.amount]);
+
+  const visibleEvaluatedOfficers = useMemo(() => {
+    if (roleFilter === 'ALL') return evaluatedOfficers;
+    return evaluatedOfficers.filter((o) => (o.role || '').toUpperCase() === roleFilter);
+  }, [evaluatedOfficers, roleFilter]);
 
   const branchTargetStats = useMemo(() => {
     const targetAmount = activeBranchTarget.amount;
@@ -1178,24 +1184,59 @@ export function BelowThreeCollectionPanel({
             </div>
           </div>
 
-          {selectedOfficer !== 'ALL' && (
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedOfficer('ALL');
-                setVisibleLimit(30);
-              }}
-              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border border-red-200 dark:border-red-900 bg-red-50/70 dark:bg-red-950/40 text-red-800 dark:text-red-300 hover:bg-red-100"
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              role="group"
+              aria-label="Filter Below 3 officers by Office Type"
+              className="inline-flex items-center p-0.5 rounded-lg bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800"
             >
-              <X className="w-3.5 h-3.5" />
-              Show Branch Total (All Officers)
-            </button>
-          )}
+              {(
+                [
+                  { id: 'ALL', label: `All (${evaluatedOfficers.length})` },
+                  {
+                    id: 'RO',
+                    label: `RO (${evaluatedOfficers.filter((o) => (o.role || '').toUpperCase() === 'RO').length})`,
+                  },
+                  {
+                    id: 'MO',
+                    label: `MO (${evaluatedOfficers.filter((o) => (o.role || '').toUpperCase() === 'MO').length})`,
+                  },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setRoleFilter(tab.id)}
+                  className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap ${
+                    roleFilter === tab.id
+                      ? 'bg-red-700 text-white shadow-xs'
+                      : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {selectedOfficer !== 'ALL' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedOfficer('ALL');
+                  setVisibleLimit(30);
+                }}
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border border-red-200 dark:border-red-900 bg-red-50/70 dark:bg-red-950/40 text-red-800 dark:text-red-300 hover:bg-red-100"
+              >
+                <X className="w-3.5 h-3.5" />
+                Show Branch Total (All Officers)
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Mobile Touch Cards View (No Sideways Table Scroll on Phones) */}
         <div className="md:hidden divide-y divide-zinc-200 dark:divide-zinc-800 tabular-nums">
-          {evaluatedOfficers.map((row) => {
+          {visibleEvaluatedOfficers.map((row) => {
             const isSelected = selectedOfficer === row.officer;
             const isSurplus = row.targetVariance >= 0;
             const barWidthPct = Math.min(100, (row.targetAchPct / 130) * 100);
@@ -1203,7 +1244,7 @@ export function BelowThreeCollectionPanel({
 
             return (
               <button
-                key={row.officer}
+                key={`${row.role}_${row.officer}`}
                 type="button"
                 onClick={() => {
                   setSelectedOfficer(isSelected ? 'ALL' : row.officer);
@@ -1350,7 +1391,7 @@ export function BelowThreeCollectionPanel({
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 tabular-nums">
-              {evaluatedOfficers.map((row) => {
+              {visibleEvaluatedOfficers.map((row) => {
                 const isSelected = selectedOfficer === row.officer;
                 const isSurplus = row.targetVariance >= 0;
                 const barWidthPct = Math.min(100, (row.targetAchPct / 130) * 100);
@@ -1358,7 +1399,7 @@ export function BelowThreeCollectionPanel({
 
                 return (
                   <tr
-                    key={row.officer}
+                    key={`${row.role}_${row.officer}`}
                     onClick={() => {
                       setSelectedOfficer(isSelected ? 'ALL' : row.officer);
                       setVisibleLimit(30);

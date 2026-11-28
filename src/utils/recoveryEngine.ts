@@ -99,10 +99,36 @@ export function isMarketingOfficeType(officeType?: string): boolean {
     ot === 'MO' ||
     ot.startsWith('MO-') ||
     ot.startsWith('MO ') ||
+    ot.startsWith('MO/') ||
     ot.includes('MARKETING')
   );
 }
 
+export function isRecoveryOfficeType(officeType?: string): boolean {
+  const ot = (officeType || '').trim().toUpperCase();
+  return (
+    ot === 'RO' ||
+    ot.startsWith('RO-') ||
+    ot.startsWith('RO ') ||
+    ot.startsWith('RO/') ||
+    ot.includes('RECOVERY')
+  );
+}
+
+export function getNormalizedOfficerRole(
+  officeType?: string,
+): 'RO' | 'MO' | 'OTHER' {
+  if (isMarketingOfficeType(officeType)) return 'MO';
+  if (isRecoveryOfficeType(officeType)) return 'RO';
+  return 'OTHER';
+}
+
+/**
+ * Strict Commercial Credit Officer Identification Rule:
+ * - Office Type = RO -> identify contract strictly under Recovery Officer (RO)
+ * - Office Type = MO -> identify contract strictly under Marketing Officer (MO)
+ * Only falls back if Office Type itself is blank/unspecified.
+ */
 export function getOfficerByOfficeType(rec: {
   officeType?: string;
   marketingOfficer?: string;
@@ -111,10 +137,218 @@ export function getOfficerByOfficeType(rec: {
 }): string {
   const mo = stripOfficerPrefix(rec.marketingOfficer);
   const ro = stripOfficerPrefix(rec.recoveryOfficer || rec.ro);
-  if (isMarketingOfficeType(rec.officeType)) {
-    return mo || ro || 'Unassigned';
+  const role = getNormalizedOfficerRole(rec.officeType);
+  if (role === 'MO') {
+    return mo || 'Unassigned MO';
+  }
+  if (role === 'RO') {
+    return ro || 'Unassigned RO';
   }
   return ro || mo || 'Unassigned';
+}
+
+export interface BranchPortfolioTotals {
+  totalContracts: number;
+  belowOneCount: number;
+  ratio90Pct: number;
+  neededFor90: number;
+  roOfficerCount: number;
+  moOfficerCount: number;
+  roContractsCount: number;
+  moContractsCount: number;
+  openingNplCount: number;
+  closingNplCount: number;
+  totalOpNpl: number;
+  totalClosingNpl: number;
+  nplBorderlineCount: number;
+  isFromBmSnapshot: boolean;
+}
+
+/**
+ * Authoritative Branch & Officer Portfolio Totals resolver.
+ * Always prioritizes full-branch `bmBranchSnapshot` (reconciled from BM Dashboard + full AERS)
+ * instead of falling back to the NPL/Borderline-only `aersRecords` subset.
+ * Works both for the entire branch (`selectedOfficer === 'ALL'`) AND for a single RO/MO officer.
+ */
+export function getBranchPortfolioTotals(
+  aersMeta: AersMetadata | null | undefined,
+  aersRecords: AersRecord[] = [],
+  selectedOfficer = 'ALL',
+): BranchPortfolioTotals {
+  const bm = aersMeta?.bmBranchSnapshot;
+  const roPerf = bm?.roPerformance ?? [];
+  const moPerf = bm?.moPerformance ?? [];
+  const allBmOfficers = [...roPerf, ...moPerf];
+
+  const roContractsCount = roPerf.reduce((s, o) => s + (Number(o.totalCount) || 0), 0);
+  const moContractsCount = moPerf.reduce((s, o) => s + (Number(o.totalCount) || 0), 0);
+  const ageBucketsSum = (bm?.ageBuckets ?? []).reduce(
+    (s, b) => s + (Number(b.count) || 0),
+    0,
+  );
+  const ageBucketsBelowOne =
+    bm?.ageBuckets && bm.ageBuckets.length >= 2
+      ? (Number(bm.ageBuckets[0]?.count) || 0) + (Number(bm.ageBuckets[1]?.count) || 0)
+      : 0;
+
+  if (selectedOfficer && selectedOfficer !== 'ALL') {
+    const targetLower = selectedOfficer.trim().toLowerCase();
+    const matchedBmRows = allBmOfficers.filter(
+      (o) => o.officer.trim().toLowerCase() === targetLower,
+    );
+    const scopedAers = aersRecords.filter(
+      (r) => getOfficerByOfficeType(r).trim().toLowerCase() === targetLower,
+    );
+
+    if (matchedBmRows.length > 0) {
+      const totalContracts = matchedBmRows.reduce(
+        (s, o) => s + (Number(o.totalCount) || 0),
+        0,
+      );
+      const belowOneCount = matchedBmRows.reduce(
+        (s, o) => s + (Number(o.belowOneCount) || 0),
+        0,
+      );
+      const ratio90Pct =
+        totalContracts > 0
+          ? Math.round((belowOneCount / totalContracts) * 1000) / 10
+          : 0;
+      const neededFor90 = Math.max(
+        0,
+        Math.ceil(totalContracts * 0.9) - belowOneCount,
+      );
+      const totalOpNpl = matchedBmRows.reduce(
+        (s, o) => s + (Number(o.opNpl) || 0),
+        0,
+      );
+      const totalClosingNpl = matchedBmRows.reduce(
+        (s, o) => s + (Number(o.closingNpl) || 0),
+        0,
+      );
+      const hasBmCounts = matchedBmRows.every(
+        (o) => typeof o.openingNplCount === 'number' && typeof o.closingNplCount === 'number',
+      );
+      const openingNplCount = hasBmCounts
+        ? matchedBmRows.reduce((s, o) => s + (o.openingNplCount || 0), 0)
+        : scopedAers.filter((r) => (r.opNpl || 0) > 0).length;
+      const closingNplCount = hasBmCounts
+        ? matchedBmRows.reduce((s, o) => s + (o.closingNplCount || 0), 0)
+        : scopedAers.filter((r) => (r.npl || 0) > 0).length;
+
+      return {
+        totalContracts,
+        belowOneCount,
+        ratio90Pct,
+        neededFor90,
+        roOfficerCount: matchedBmRows.filter((o) => o.role === 'RO').length,
+        moOfficerCount: matchedBmRows.filter((o) => o.role === 'MO').length,
+        roContractsCount: matchedBmRows
+          .filter((o) => o.role === 'RO')
+          .reduce((s, o) => s + (o.totalCount || 0), 0),
+        moContractsCount: matchedBmRows
+          .filter((o) => o.role === 'MO')
+          .reduce((s, o) => s + (o.totalCount || 0), 0),
+        openingNplCount,
+        closingNplCount,
+        totalOpNpl,
+        totalClosingNpl,
+        nplBorderlineCount: scopedAers.length,
+        isFromBmSnapshot: true,
+      };
+    }
+
+    const totalContracts = scopedAers.length;
+    const belowOneCount = scopedAers.filter((r) => (r.currentAge || 0) <= 1.0).length;
+    const ratio90Pct =
+      totalContracts > 0
+        ? Math.round((belowOneCount / totalContracts) * 1000) / 10
+        : 0;
+    return {
+      totalContracts,
+      belowOneCount,
+      ratio90Pct,
+      neededFor90: Math.max(0, Math.ceil(totalContracts * 0.9) - belowOneCount),
+      roOfficerCount: scopedAers.some((r) => getNormalizedOfficerRole(r.officeType) === 'RO') ? 1 : 0,
+      moOfficerCount: scopedAers.some((r) => getNormalizedOfficerRole(r.officeType) === 'MO') ? 1 : 0,
+      roContractsCount: scopedAers.filter((r) => getNormalizedOfficerRole(r.officeType) === 'RO').length,
+      moContractsCount: scopedAers.filter((r) => getNormalizedOfficerRole(r.officeType) === 'MO').length,
+      openingNplCount: scopedAers.filter((r) => (r.opNpl || 0) > 0).length,
+      closingNplCount: scopedAers.filter((r) => (r.npl || 0) > 0).length,
+      totalOpNpl: scopedAers.reduce((s, r) => s + (r.opNpl || 0), 0),
+      totalClosingNpl: scopedAers.reduce((s, r) => s + (r.npl || 0), 0),
+      nplBorderlineCount: scopedAers.length,
+      isFromBmSnapshot: false,
+    };
+  }
+
+  // Full branch resolution
+  const roMoSum = roContractsCount + moContractsCount;
+  const metaFullFallback =
+    (aersMeta?.totalContractsCount || aersRecords.length) +
+    (aersMeta?.excludedRegularCount || 0);
+  const totalContracts =
+    (bm?.totalContracts && bm.totalContracts > 0 ? bm.totalContracts : 0) ||
+    (roMoSum > 0 ? roMoSum : 0) ||
+    (ageBucketsSum > 0 ? ageBucketsSum : 0) ||
+    metaFullFallback ||
+    aersRecords.length;
+
+  const officersBelowOneSum = allBmOfficers.reduce(
+    (s, o) => s + (Number(o.belowOneCount) || 0),
+    0,
+  );
+  const belowOneCount =
+    (bm?.belowOneCount !== undefined && bm.belowOneCount > 0
+      ? bm.belowOneCount
+      : 0) ||
+    (ageBucketsBelowOne > 0 ? ageBucketsBelowOne : 0) ||
+    (officersBelowOneSum > 0 ? officersBelowOneSum : 0) ||
+    aersRecords.filter((r) => (r.currentAge || 0) <= 1.0).length;
+
+  const ratio90Pct =
+    bm?.ratio90Pct && bm.ratio90Pct > 0
+      ? bm.ratio90Pct
+      : totalContracts > 0
+        ? Math.round((belowOneCount / totalContracts) * 1000) / 10
+        : 0;
+  const neededFor90 = Math.max(
+    0,
+    Math.ceil(totalContracts * 0.9) - belowOneCount,
+  );
+
+  const openingNplCount =
+    bm?.openingNplCount ??
+    aersRecords.filter((r) => (r.opNpl || 0) > 0).length;
+  const closingNplCount =
+    bm?.closingNplCount ??
+    aersRecords.filter((r) => (r.npl || 0) > 0).length;
+  const totalOpNpl =
+    bm?.totalOpNpl ??
+    (allBmOfficers.length > 0
+      ? allBmOfficers.reduce((s, o) => s + (o.opNpl || 0), 0)
+      : aersRecords.reduce((s, r) => s + (r.opNpl || 0), 0));
+  const totalClosingNpl =
+    bm?.totalClosingNpl ??
+    (allBmOfficers.length > 0
+      ? allBmOfficers.reduce((s, o) => s + (o.closingNpl || 0), 0)
+      : aersRecords.reduce((s, r) => s + (r.npl || 0), 0));
+
+  return {
+    totalContracts,
+    belowOneCount,
+    ratio90Pct,
+    neededFor90,
+    roOfficerCount: roPerf.length,
+    moOfficerCount: moPerf.length,
+    roContractsCount,
+    moContractsCount,
+    openingNplCount,
+    closingNplCount,
+    totalOpNpl,
+    totalClosingNpl,
+    nplBorderlineCount: aersRecords.length,
+    isFromBmSnapshot: Boolean(bm && (roMoSum > 0 || ageBucketsSum > 0 || (bm.totalContracts ?? 0) > 0)),
+  };
 }
 
 export function isWorstCategory(
@@ -628,70 +862,118 @@ function parseAersRows(
     return '';
   };
 
-  const records: AersRecord[] = [];
+  const recordsByContract = new Map<string, AersRecord>();
   for (let r = dataStartIdx; r < rows.length; r++) {
     const row = rows[r] || [];
     const contractNoRaw = String(
-      getCell(row, 'contract_no', 'contract no') ?? '',
+      getCell(row, 'contract_no', 'contract no', 'contract number') ?? '',
     ).trim();
-    if (!contractNoRaw || contractNoRaw.toUpperCase() === 'TOTAL') continue;
+    if (
+      !contractNoRaw ||
+      /^(grand\s*total|sub\s*total|subtotal|branch\s*total|total|summary|ro\s*total|mo\s*total)$/i.test(
+        contractNoRaw,
+      )
+    ) {
+      continue;
+    }
+
+    const rawOfficeType = String(
+      getCell(
+        row,
+        'office type',
+        'office_type',
+        'officer type',
+        'officer_type',
+        'ro/mo',
+        'ro / mo',
+        'officer_role',
+        'office',
+      ) ?? '',
+    ).trim();
+    const normRole = getNormalizedOfficerRole(rawOfficeType);
+    const canonicalOfficeType =
+      normRole === 'RO' ? 'RO' : normRole === 'MO' ? 'MO' : rawOfficeType;
+
+    const normalizedNo = normalizeContractNo(contractNoRaw);
+    if (!normalizedNo) continue;
 
     const record: AersRecord = {
       no: String(getCell(row, 'no') ?? '').trim(),
-      contractNo: normalizeContractNo(contractNoRaw),
-      cusName: String(getCell(row, 'cus_name', 'customer name') ?? '').trim(),
-      contractDate: parseExcelDate(getCell(row, 'contract_date')),
-      opAge: parseNumeric(getCell(row, 'op_age')),
-      currentAge: parseNumeric(getCell(row, 'current_age')),
-      opBalDebtor: parseNumeric(getCell(row, 'op_bal_debtor')),
-      closingDebtor: parseNumeric(getCell(row, 'closing_debtor')),
-      dueBudgetMonth: parseNumeric(getCell(row, 'due_budget_month')),
-      currentMonthDue: parseNumeric(getCell(row, 'current_month_due')),
-      totalCollection: parseNumeric(getCell(row, 'total_collection')),
-      cashColl: parseNumeric(getCell(row, 'cash_coll')),
-      capitalOutstanding: parseNumeric(getCell(row, 'capital_outstanding')),
+      contractNo: normalizedNo,
+      cusName: String(getCell(row, 'cus_name', 'customer name', 'customer_name') ?? '').trim(),
+      contractDate: parseExcelDate(getCell(row, 'contract_date', 'contract date')),
+      opAge: parseNumeric(getCell(row, 'op_age', 'op age')),
+      currentAge: parseNumeric(getCell(row, 'current_age', 'current age')),
+      opBalDebtor: parseNumeric(getCell(row, 'op_bal_debtor', 'op bal debtor')),
+      closingDebtor: parseNumeric(getCell(row, 'closing_debtor', 'closing debtor')),
+      dueBudgetMonth: parseNumeric(getCell(row, 'due_budget_month', 'due budget month')),
+      currentMonthDue: parseNumeric(getCell(row, 'current_month_due', 'current month due')),
+      totalCollection: parseNumeric(getCell(row, 'total_collection', 'total collection')),
+      cashColl: parseNumeric(getCell(row, 'cash_coll', 'cash coll')),
+      capitalOutstanding: parseNumeric(getCell(row, 'capital_outstanding', 'capital outstanding')),
       capitalArrears: parseNumeric(
         getCell(row, 'capital_arrears', 'capital arrears', 'cap_arrears'),
       ),
-      interestInSuspense: parseNumeric(getCell(row, 'interest in suspense')),
-      actualDpd: parseNumeric(getCell(row, 'actual_dpd')),
-      monthEndForecastDpd: parseNumeric(getCell(row, 'month_end_forecast_dpd')),
+      interestInSuspense: parseNumeric(getCell(row, 'interest in suspense', 'interest_in_suspense')),
+      actualDpd: parseNumeric(getCell(row, 'actual_dpd', 'actual dpd')),
+      monthEndForecastDpd: parseNumeric(getCell(row, 'month_end_forecast_dpd', 'month end forecast dpd')),
       minAmountToReverseNpl: parseNumeric(
-        getCell(row, 'min_amount_to_reverse_npl'),
+        getCell(row, 'min_amount_to_reverse_npl', 'min amount to reverse npl'),
       ),
       opNpl: parseNumeric(getCell(row, 'op npl', 'op_npl')),
       npl: parseNumeric(getCell(row, 'npl')),
-      nextDueDate: parseExcelDate(getCell(row, 'next_due_date')),
-      lastPayDate: parseExcelDate(getCell(row, 'last_pay_date')),
-      lastPaidAmount: parseNumeric(getCell(row, 'last_paid_amount')),
-      contractStatus: String(getCell(row, 'contract_status') ?? '').trim(),
-      recoveryStatus: String(getCell(row, 'recovery_status') ?? '').trim(),
+      nextDueDate: parseExcelDate(getCell(row, 'next_due_date', 'next due date')),
+      lastPayDate: parseExcelDate(getCell(row, 'last_pay_date', 'last pay date')),
+      lastPaidAmount: parseNumeric(getCell(row, 'last_paid_amount', 'last paid amount')),
+      contractStatus: String(getCell(row, 'contract_status', 'contract status') ?? '').trim(),
+      recoveryStatus: String(getCell(row, 'recovery_status', 'recovery status') ?? '').trim(),
       marketingOfficer: stripOfficerPrefix(
-        String(getCell(row, 'marketing_officer') ?? ''),
+        String(
+          getCell(
+            row,
+            'marketing_officer',
+            'marketing officer',
+            'mo',
+            'mo_name',
+            'mo name',
+          ) ?? '',
+        ),
       ),
       recoveryOfficer: stripOfficerPrefix(
-        String(getCell(row, 'recovery_officer') ?? ''),
+        String(
+          getCell(
+            row,
+            'recovery_officer',
+            'recovery officer',
+            'ro',
+            'ro_name',
+            'ro name',
+          ) ?? '',
+        ),
       ),
-      financeAmount: parseNumeric(getCell(row, 'finance_amount')),
-      currentStock: String(getCell(row, 'current_stock') ?? '').trim(),
+      financeAmount: parseNumeric(getCell(row, 'finance_amount', 'finance amount')),
+      currentStock: String(getCell(row, 'current_stock', 'current stock') ?? '').trim(),
       department: String(getCell(row, 'department') ?? '').trim(),
       address: String(getCell(row, 'address') ?? '').trim(),
-      mobileNo: String(getCell(row, 'mobile_no') ?? '').trim(),
+      mobileNo: String(getCell(row, 'mobile_no', 'mobile no') ?? '').trim(),
       opCapitalOutstanding: parseNumeric(
         getCell(row, 'op capital outstanding', 'op_capital_outstanding'),
       ),
       nplReason: String(getCell(row, 'npl reason', 'npl_reason') ?? '').trim(),
       worstCaseProduct: String(
-        getCell(row, 'worst case related product') ?? '',
+        getCell(row, 'worst case related product', 'worst_case_related_product') ?? '',
       ).trim(),
-      officeType: String(getCell(row, 'office type') ?? '').trim(),
-      currentRc: String(getCell(row, 'current rc') ?? '').trim(),
-      totalEfforts: parseNumeric(getCell(row, 'total efforts')),
-      assignOfficerEfforts: parseNumeric(getCell(row, 'assign officer efforts')),
+      officeType: canonicalOfficeType,
+      currentRc: String(getCell(row, 'current rc', 'current_rc') ?? '').trim(),
+      totalEfforts: parseNumeric(getCell(row, 'total efforts', 'total_efforts')),
+      assignOfficerEfforts: parseNumeric(
+        getCell(row, 'assign officer efforts', 'assign_officer_efforts'),
+      ),
     };
 
-    records.push(record);
+    recordsByContract.set(normalizedNo, record);
   }
+  const records: AersRecord[] = Array.from(recordsByContract.values());
 
   if (records.length === 0) {
     throw new Error(
@@ -1033,6 +1315,7 @@ function parseBmDashboardBelowThree(
 
   interface ColMap {
     officerCol?: number;
+    roleCol?: number;
     targetCol?: number;
     targetHint?: string;
     collectedCol?: number;
@@ -1050,16 +1333,24 @@ function parseBmDashboardBelowThree(
   const classifyHeaders = (
     headers: string[],
     headerSpanRows: number,
+    minCol = 0,
   ): ColMap | null => {
     const map: ColMap = { headerSpanRows };
     let hits = 0;
 
-    for (let c = 0; c < headers.length; c++) {
+    for (let c = minCol; c < headers.length; c++) {
       const h = headers[c];
       if (!h) continue;
       const hl = h.toLowerCase();
 
       if (
+        map.roleCol === undefined &&
+        /^(office\s*type|officer\s*type|role|type|ro\s*\/\s*mo\s*type|category\s*type)$/i.test(
+          hl,
+        )
+      ) {
+        map.roleCol = c;
+      } else if (
         map.officerCol === undefined &&
         /^(officer|ro|mo|ro\s*\/\s*mo|ro\s*&\s*mo|officer\s*name|name|staff|user|exec|executive|code|recovery\s*officer|marketing\s*officer|assigned\s*officer|ro\s*name|mo\s*name|category|description|particulars|branch)$/i.test(
           hl,
@@ -1102,7 +1393,7 @@ function parseBmDashboardBelowThree(
         hits += 1;
       } else if (
         map.totalCountCol === undefined &&
-        /(total\s*(acct|cont|no|cnt)|no\.?\s*of\s*(cont|acct)|^accts?$|^contracts?$|^count$|^nos?\.?$)/i.test(
+        /(total\s*(acct|cont|no|cnt)|no\.?\s*of\s*(cont|acct)|^accts?$|^contracts?$|^count$|^nos?\.?$|assigned)/i.test(
           hl,
         )
       ) {
@@ -1153,11 +1444,12 @@ function parseBmDashboardBelowThree(
   const detectHeaderCols = (
     row: unknown[],
     nextRow?: unknown[],
+    minCol = 0,
   ): ColMap | null => {
     const singleHeaders = row.map((cell) =>
       String(cell ?? '').trim().replace(/\s+/g, ' '),
     );
-    const singleMatch = classifyHeaders(singleHeaders, 1);
+    const singleMatch = classifyHeaders(singleHeaders, 1, minCol);
     if (singleMatch) return singleMatch;
 
     if (nextRow && nextRow.length > 0) {
@@ -1175,14 +1467,14 @@ function parseBmDashboardBelowThree(
             : sub || top;
         mergedHeaders.push(combined);
       }
-      const mergedMatch = classifyHeaders(mergedHeaders, 2);
+      const mergedMatch = classifyHeaders(mergedHeaders, 2, minCol);
       if (mergedMatch) return mergedMatch;
     }
 
     return null;
   };
 
-  // Extract best text label to the left of targetCol (handles leading serial # column e.g. Col A = 1, Col B = Officer)
+  // Extract best text label scoped strictly to the table's horizontal block (never reads unrelated Col A of side-by-side tables)
   const extractRowLabel = (
     drow: unknown[],
     cols: ColMap,
@@ -1192,11 +1484,13 @@ function parseBmDashboardBelowThree(
       const direct = String(drow[cols.officerCol] ?? '').trim();
       if (direct && !/^\d+$/.test(direct)) return direct;
     }
+    const startScan = fallbackCol > 1 ? Math.max(0, fallbackCol - 1) : 0;
     const maxScan = Math.min(
       drow.length - 1,
       Math.min(cols.targetCol ?? drow.length, cols.collectedCol ?? drow.length) - 1,
     );
-    for (let c = 0; c <= Math.max(0, maxScan); c++) {
+    for (let c = startScan; c <= Math.max(startScan, maxScan); c++) {
+      if (c === cols.roleCol) continue;
       const val = String(drow[c] ?? '').trim();
       if (val && !/^\d+(\.\d+)?$/.test(val)) return val;
     }
@@ -1232,9 +1526,12 @@ function parseBmDashboardBelowThree(
     const bottomBonus = anchor.r >= Math.floor(rows.length * 0.45) ? 20 : 0;
     const titleBonus = anchor.isBelow3Coll ? 30 : 0;
 
+    const minCol = anchor.c > 1 ? Math.max(0, anchor.c - 1) : 0;
     let tableFound = false;
     for (let hr = anchor.r; hr <= Math.min(rows.length - 1, anchor.r + 6); hr++) {
-      const cols = detectHeaderCols(rows[hr] || [], rows[hr + 1]);
+      const cols =
+        detectHeaderCols(rows[hr] || [], rows[hr + 1], minCol) ??
+        (minCol > 0 ? detectHeaderCols(rows[hr] || [], rows[hr + 1], 0) : null);
       if (!cols || cols.targetCol === undefined || cols.collectedCol === undefined) continue;
 
       tableFound = true;
@@ -1255,11 +1552,12 @@ function parseBmDashboardBelowThree(
       let subTotalSumTarget = 0;
       let subTotalSumCollected = 0;
       let subTotalCount = 0;
+      let activeSectionRole: 'RO' | 'MO' | undefined;
 
       let blankStreak = 0;
       const startDataRow = hr + cols.headerSpanRows;
 
-      for (let dr = startDataRow; dr <= Math.min(rows.length - 1, startDataRow + 50); dr++) {
+      for (let dr = startDataRow; dr <= Math.min(rows.length - 1, startDataRow + 60); dr++) {
         const drow = rows[dr] || [];
         const rawLabel = extractRowLabel(drow, cols, anchor.c);
         const tVal = parseAmountWithMillionHint(drow[cols.targetCol], cols.targetHint);
@@ -1271,6 +1569,18 @@ function parseBmDashboardBelowThree(
           continue;
         }
         blankStreak = 0;
+
+        // Track stacked RO / MO section dividers inside the Below 3 table
+        if (tVal === null && cVal === null && rawLabel) {
+          if (/^(ro|recovery\s*officers?)\b/i.test(rawLabel)) {
+            activeSectionRole = 'RO';
+            continue;
+          }
+          if (/^(mo|marketing\s*officers?)\b/i.test(rawLabel)) {
+            activeSectionRole = 'MO';
+            continue;
+          }
+        }
 
         // Stop if we hit an unrelated new section header after already reading rows
         if (
@@ -1316,7 +1626,6 @@ function parseBmDashboardBelowThree(
             : undefined;
 
         if (isGrandTotalRow && tVal && tVal > 0 && cVal !== null && cVal >= 0) {
-          // Keep the largest grand total if both subtotal and grand total share label "Total"
           if (!grandTotalRow || tVal >= grandTotalRow.target) {
             grandTotalRow = {
               target: tVal,
@@ -1329,8 +1638,6 @@ function parseBmDashboardBelowThree(
               needCnt: needCnt !== undefined && needCnt >= 0 ? needCnt : undefined,
             };
           }
-          // Do NOT break immediately if label was simply "Total" and RO/MO tables are stacked;
-          // break only on explicit "Grand Total" / "Branch Total"
           if (/grand|branch|overall|below\s*3/i.test(rawLabel)) {
             break;
           }
@@ -1349,9 +1656,16 @@ function parseBmDashboardBelowThree(
           /^(ro|mo|officer|recovery\s*officers?|marketing\s*officers?|name|age|bucket|\[[a-i]\])/i.test(
             rawLabel,
           );
-        if (isSectionDivider) continue;
+        if (isSectionDivider) {
+          if (/^(ro|recovery\s*officers?)/i.test(rawLabel)) activeSectionRole = 'RO';
+          else if (/^(mo|marketing\s*officers?)/i.test(rawLabel)) activeSectionRole = 'MO';
+          continue;
+        }
 
         if (tVal !== null && tVal > 0 && cVal !== null && cVal >= 0 && rawLabel) {
+          const explicitRoleCell =
+            cols.roleCol !== undefined ? String(drow[cols.roleCol] ?? '').trim() : '';
+          const explicitRoleNorm = getNormalizedOfficerRole(explicitRoleCell);
           const matchedOff = matchOfficer(rawLabel);
           const cleanName = matchedOff
             ? matchedOff.officer
@@ -1359,7 +1673,11 @@ function parseBmDashboardBelowThree(
                 .replace(/\s*\((ro|mo)\)\s*$/i, '')
                 .trim();
 
-          // Accept known officers, or valid officer-like names (excluding numeric/age-range labels)
+          const resolvedRole =
+            explicitRoleNorm !== 'OTHER'
+              ? explicitRoleNorm
+              : activeSectionRole || matchedOff?.role;
+
           const looksLikeOfficerName =
             matchedOff !== null ||
             (cleanName.length >= 3 &&
@@ -1377,9 +1695,10 @@ function parseBmDashboardBelowThree(
                 : tVal > 0
                   ? Math.round((cVal / tVal) * 1000) / 10
                   : 0;
-            localOfficers.set(cleanName.toLowerCase(), {
+            const mapKey = `${(resolvedRole || 'ANY').toUpperCase()}::${cleanName.toLowerCase()}`;
+            localOfficers.set(mapKey, {
               officer: cleanName,
-              role: matchedOff?.role,
+              role: resolvedRole,
               targetAmount: tVal,
               collectedAmount: cVal,
               varianceAmount: variance,
@@ -1612,16 +1931,255 @@ function parseBmDashboardBelowThree(
   };
 }
 
+interface BmDashboardOfficerOverride {
+  officer: string;
+  role: 'RO' | 'MO';
+  totalCount?: number;
+  belowOneCount?: number;
+  dueBudget?: number;
+  totalCollection?: number;
+  opNpl?: number;
+  closingNpl?: number;
+}
+
+interface BmDashboardPortfolioExtracted {
+  totalContracts?: number;
+  belowOneCount?: number;
+  officerOverrides: BmDashboardOfficerOverride[];
+}
+
+/**
+ * Extracts authoritative RO / MO officer assigned counts and Branch Total Contracts
+ * directly from the `BM Dashboard` sheet (in addition to `Below 3 Collection`).
+ */
+function parseBmDashboardPortfolio(
+  rows: unknown[][],
+  knownOfficers: Map<string, { officer: string; role: 'RO' | 'MO' }>,
+): BmDashboardPortfolioExtracted | undefined {
+  if (!rows || rows.length === 0) return undefined;
+
+  const overrides = new Map<string, BmDashboardOfficerOverride>();
+  let detectedBranchTotal: number | undefined;
+  let detectedBelowOne: number | undefined;
+
+  const matchKnown = (
+    raw: string,
+    preferredRole?: 'RO' | 'MO',
+  ): { officer: string; role: 'RO' | 'MO' } | null => {
+    const cleaned = stripOfficerPrefix(raw)
+      .replace(/\s*\((ro|mo)\)\s*$/i, '')
+      .trim();
+    if (!cleaned || cleaned.length < 2) return null;
+    const lower = cleaned.toLowerCase();
+    if (preferredRole) {
+      const exactRole = knownOfficers.get(`${preferredRole}::${lower}`);
+      if (exactRole) return exactRole;
+    }
+    const direct = knownOfficers.get(lower);
+    if (direct) return direct;
+    const compact = lower.replace(/[^a-z0-9]/g, '');
+    for (const val of knownOfficers.values()) {
+      const vc = val.officer.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (
+        vc === compact ||
+        (compact.length >= 4 && (vc.includes(compact) || compact.includes(vc)))
+      ) {
+        if (!preferredRole || val.role === preferredRole) return val;
+      }
+    }
+    return null;
+  };
+
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const cells = row.map((c) => String(c ?? '').trim());
+
+    // Look for RO / MO officer performance table headers (distinct from Below 3 table)
+    for (let c = 0; c < cells.length; c++) {
+      const txt = cells[c];
+      if (!txt) continue;
+      const isRoHeader = /^(ro|recovery\s*officer|ro\s*name|recovery\s*officers?)$/i.test(txt);
+      const isMoHeader = /^(mo|marketing\s*officer|mo\s*name|marketing\s*officers?)$/i.test(txt);
+      if (!isRoHeader && !isMoHeader) continue;
+
+      // Skip if this table is actually the Below 3 Collection section
+      const prevBanner = String(rows[Math.max(0, r - 1)]?.[c] ?? '') + ' ' + String(rows[Math.max(0, r - 2)]?.[c] ?? '');
+      if (/below\s*[-–_]?\s*3|b\s*\/?\s*3/i.test(prevBanner)) continue;
+
+      const role: 'RO' | 'MO' = isMoHeader ? 'MO' : 'RO';
+      let countCol = -1;
+      let belowOneCol = -1;
+      let dueCol = -1;
+      let collCol = -1;
+      let opNplCol = -1;
+      let closeNplCol = -1;
+
+      const maxScanCol = Math.min(cells.length - 1, c + 12);
+      for (let hc = c + 1; hc <= maxScanCol; hc++) {
+        const h = cells[hc].toLowerCase();
+        if (!h) continue;
+        if (countCol < 0 && /^(total\s*(acct|cont|no|cnt)|no\.?\s*of\s*(cont|acct)|accts?|contracts?|count|nos?\.?|assigned)$/i.test(h)) {
+          countCol = hc;
+        } else if (belowOneCol < 0 && /(below\s*1|<=?\s*1(\.00)?|0\s*[-~]\s*1)/i.test(h) && !/%|ratio/i.test(h)) {
+          belowOneCol = hc;
+        } else if (dueCol < 0 && /(due\s*budget|monthly\s*due|total\s*due|^due$)/i.test(h)) {
+          dueCol = hc;
+        } else if (collCol < 0 && /(total\s*coll|collection|^coll$)/i.test(h) && !/%|eff/i.test(h)) {
+          collCol = hc;
+        } else if (opNplCol < 0 && /(op\.?\s*npl|opening\s*npl)/i.test(h)) {
+          opNplCol = hc;
+        } else if (closeNplCol < 0 && /(clos(ing)?\s*npl|^npl$)/i.test(h)) {
+          closeNplCol = hc;
+        }
+      }
+
+      if (countCol < 0) continue;
+
+      let blanks = 0;
+      for (let dr = r + 1; dr <= Math.min(rows.length - 1, r + 30); dr++) {
+        const drow = rows[dr] || [];
+        const lbl = String(drow[c] ?? '').trim();
+        const cntVal = drow[countCol];
+        const hasCnt = /\d/.test(String(cntVal ?? ''));
+        if (!lbl && !hasCnt) {
+          blanks += 1;
+          if (blanks >= 2) break;
+          continue;
+        }
+        blanks = 0;
+        if (/^(total|sub\s*total|grand\s*total|branch\s*total|ro\s*total|mo\s*total)/i.test(lbl)) {
+          break;
+        }
+        const matched = matchKnown(lbl, role);
+        if (!matched || !hasCnt) continue;
+        const cntNum = Math.round(parseNumeric(cntVal));
+        if (cntNum <= 0) continue;
+
+        const key = `${role}::${matched.officer.toLowerCase()}`;
+        const existing = overrides.get(key) ?? { officer: matched.officer, role };
+        existing.totalCount = cntNum;
+        if (belowOneCol >= 0 && /\d/.test(String(drow[belowOneCol] ?? ''))) {
+          existing.belowOneCount = Math.round(parseNumeric(drow[belowOneCol]));
+        }
+        if (dueCol >= 0) {
+          const v = parseAmountWithMillionHint(drow[dueCol], cells[dueCol]);
+          if (v !== null && v > 0) existing.dueBudget = v;
+        }
+        if (collCol >= 0) {
+          const v = parseAmountWithMillionHint(drow[collCol], cells[collCol]);
+          if (v !== null && v >= 0) existing.totalCollection = v;
+        }
+        if (opNplCol >= 0) {
+          const v = parseAmountWithMillionHint(drow[opNplCol], cells[opNplCol]);
+          if (v !== null && v >= 0) existing.opNpl = v;
+        }
+        if (closeNplCol >= 0) {
+          const v = parseAmountWithMillionHint(drow[closeNplCol], cells[closeNplCol]);
+          if (v !== null && v >= 0) existing.closingNpl = v;
+        }
+        overrides.set(key, existing);
+      }
+    }
+
+    // Detect explicit Branch Total Contracts KPI cell (e.g. "Total Contracts" | 1950)
+    for (let c = 0; c < cells.length; c++) {
+      const lower = cells[c].toLowerCase();
+      if (/^(branch\s*)?total\s*(active\s*)?(contracts?|accounts?|portfolio)$/.test(lower)) {
+        for (const cand of [row[c + 1], row[c + 2], rows[r + 1]?.[c]]) {
+          if (cand !== undefined && cand !== null && cand !== '' && /\d/.test(String(cand))) {
+            const n = Math.round(parseNumeric(cand));
+            if (n >= 50 && n <= 100_000) {
+              detectedBranchTotal = n;
+              break;
+            }
+          }
+        }
+      }
+      if (/^(below\s*1|age\s*<=?\s*1(\.00)?)\s*(contracts?|accounts?|count)?$/.test(lower)) {
+        for (const cand of [row[c + 1], row[c + 2], rows[r + 1]?.[c]]) {
+          if (cand !== undefined && cand !== null && cand !== '' && /\d/.test(String(cand))) {
+            const n = Math.round(parseNumeric(cand));
+            if (n >= 10 && n <= 100_000) {
+              detectedBelowOne = n;
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const list = Array.from(overrides.values());
+  if (list.length === 0 && !detectedBranchTotal && !detectedBelowOne) {
+    return undefined;
+  }
+  return {
+    totalContracts: detectedBranchTotal,
+    belowOneCount: detectedBelowOne,
+    officerOverrides: list,
+  };
+}
+
 function applyStrictNplUniverseFilter(
   baseResult: ParsedAersResult,
   mrpMap?: Map<string, MrpEnrichment>,
   watchlistImports?: Sheet2WatchlistRow[],
   bmDashboardBelowThree?: BmDashboardBelowThreeExtracted,
+  bmDashboardPortfolio?: BmDashboardPortfolioExtracted,
 ): ParsedAersResult {
   const allRecords = baseResult.records;
   const ageBuckets = computeBmAgeBuckets(allRecords, []);
-  const totalContracts = allRecords.length;
-  const belowOneCount = allRecords.filter((r) => (r.currentAge || 0) <= 1.0).length;
+  let roPerformance = computeBmOfficerPerformance(allRecords, [], 'RO');
+  let moPerformance = computeBmOfficerPerformance(allRecords, [], 'MO');
+
+  // Reconcile officer totals with verified BM Dashboard sheet figures if present
+  if (bmDashboardPortfolio?.officerOverrides?.length) {
+    const overrideMap = new Map<string, BmDashboardOfficerOverride>();
+    for (const ov of bmDashboardPortfolio.officerOverrides) {
+      overrideMap.set(`${ov.role}::${ov.officer.toLowerCase()}`, ov);
+    }
+    const applyOverride = (rows: BmOfficerPerformanceRow[]): BmOfficerPerformanceRow[] =>
+      rows.map((row) => {
+        const ov = overrideMap.get(`${row.role}::${row.officer.toLowerCase()}`);
+        if (!ov) return row;
+        const nextTotal = ov.totalCount ?? row.totalCount;
+        const nextBelowOne = ov.belowOneCount ?? row.belowOneCount;
+        const nextDue = ov.dueBudget ?? row.dueBudget;
+        const nextColl = ov.totalCollection ?? row.totalCollection;
+        const nextOpNpl = ov.opNpl ?? row.opNpl;
+        const nextCloseNpl = ov.closingNpl ?? row.closingNpl;
+        return {
+          ...row,
+          totalCount: nextTotal,
+          belowOneCount: nextBelowOne,
+          dueBudget: nextDue,
+          totalCollection: nextColl,
+          collectionEfficiencyPct:
+            nextDue > 0 ? Math.round((nextColl / nextDue) * 1000) / 10 : row.collectionEfficiencyPct,
+          opNpl: nextOpNpl,
+          closingNpl: nextCloseNpl,
+          netNplVariance: nextCloseNpl - nextOpNpl,
+          ratio90Pct:
+            nextTotal > 0 ? Math.round((nextBelowOne / nextTotal) * 1000) / 10 : row.ratio90Pct,
+        };
+      });
+    roPerformance = applyOverride(roPerformance);
+    moPerformance = applyOverride(moPerformance);
+  }
+
+  const roMoTotal =
+    roPerformance.reduce((s, o) => s + o.totalCount, 0) +
+    moPerformance.reduce((s, o) => s + o.totalCount, 0);
+  const totalContracts =
+    bmDashboardPortfolio?.totalContracts && bmDashboardPortfolio.totalContracts > 0
+      ? bmDashboardPortfolio.totalContracts
+      : roMoTotal > 0
+        ? roMoTotal
+        : allRecords.length;
+  const belowOneCount =
+    bmDashboardPortfolio?.belowOneCount && bmDashboardPortfolio.belowOneCount > 0
+      ? bmDashboardPortfolio.belowOneCount
+      : allRecords.filter((r) => (r.currentAge || 0) <= 1.0).length;
   const ratio90Pct =
     totalContracts > 0 ? Math.round((belowOneCount / totalContracts) * 1000) / 10 : 0;
   const openingNplCount = allRecords.filter((r) => (r.opNpl || 0) > 0).length;
@@ -1631,8 +2189,8 @@ function applyStrictNplUniverseFilter(
 
   const bmBranchSnapshot = {
     ageBuckets,
-    roPerformance: computeBmOfficerPerformance(allRecords, [], 'RO'),
-    moPerformance: computeBmOfficerPerformance(allRecords, [], 'MO'),
+    roPerformance,
+    moPerformance,
     ageGroupEfforts: computeAgeGroupEfforts(allRecords),
     belowOneQuickWins: extractBelowOneQuickWins(allRecords),
     belowThreeSummary: computeBelowThreeCollectionSnapshot(
@@ -1671,7 +2229,9 @@ function applyStrictNplUniverseFilter(
     },
     mrpMap,
     watchlistImports,
-    isMultiSheetWorkbook: Boolean(mrpMap || watchlistImports || bmDashboardBelowThree),
+    isMultiSheetWorkbook: Boolean(
+      mrpMap || watchlistImports || bmDashboardBelowThree || bmDashboardPortfolio,
+    ),
     excludedRegularContractNos,
   };
 }
@@ -1749,13 +2309,21 @@ export function parseAersWorkbook(
     );
 
   let bmDashboardBelowThree: BmDashboardBelowThreeExtracted | undefined;
+  let bmDashboardPortfolio: BmDashboardPortfolioExtracted | undefined;
   if (bmDashSheetName && bmDashSheetName !== aersSheetName) {
-    const knownOfficers = new Map<string, { officer: string; role: string }>();
+    const knownOfficers = new Map<string, { officer: string; role: 'RO' | 'MO' }>();
     for (const rec of baseResult.records) {
+      const roleNorm = getNormalizedOfficerRole(rec.officeType);
+      if (roleNorm === 'OTHER') continue;
       const off = getOfficerByOfficeType(rec);
-      if (!off || off === 'Unassigned') continue;
-      const role = isMarketingOfficeType(rec.officeType) ? 'MO' : 'RO';
-      knownOfficers.set(off.toLowerCase(), { officer: off, role });
+      if (!off || off.startsWith('Unassigned')) continue;
+      knownOfficers.set(`${roleNorm}::${off.toLowerCase()}`, {
+        officer: off,
+        role: roleNorm,
+      });
+      if (!knownOfficers.has(off.toLowerCase())) {
+        knownOfficers.set(off.toLowerCase(), { officer: off, role: roleNorm });
+      }
     }
     const bmRows = XLSX.utils.sheet_to_json<unknown[]>(
       workbook.Sheets[bmDashSheetName],
@@ -1766,6 +2334,7 @@ export function parseAersWorkbook(
       bmDashSheetName,
       knownOfficers,
     );
+    bmDashboardPortfolio = parseBmDashboardPortfolio(bmRows, knownOfficers);
   }
 
   return applyStrictNplUniverseFilter(
@@ -1773,6 +2342,7 @@ export function parseAersWorkbook(
     mrpMap,
     watchlistImports,
     bmDashboardBelowThree,
+    bmDashboardPortfolio,
   );
 }
 
@@ -3244,14 +3814,18 @@ export function computeBmOfficerPerformance(
   trackedContracts: TrackedContract[],
   role: 'RO' | 'MO',
 ): BmOfficerPerformanceRow[] {
+  const matchesRole = (officeType?: string, recRo?: string, recMo?: string) => {
+    const norm = getNormalizedOfficerRole(officeType);
+    if (role === 'MO') return norm === 'MO';
+    if (norm === 'RO') return true;
+    // Only include blank officeType under RO if recoveryOfficer is explicitly set and marketingOfficer isn't
+    return norm === 'OTHER' && !officeType?.trim() && Boolean(recRo?.trim()) && !recMo?.trim();
+  };
+
   const source =
     aersRecords.length > 0
       ? aersRecords
-          .filter((r) =>
-            role === 'MO'
-              ? isMarketingOfficeType(r.officeType)
-              : !isMarketingOfficeType(r.officeType),
-          )
+          .filter((r) => matchesRole(r.officeType, r.recoveryOfficer, r.marketingOfficer))
           .map((r) => ({
             officer: getOfficerByOfficeType(r),
             dueBudget: r.dueBudgetMonth || r.currentMonthDue || 0,
@@ -3263,11 +3837,7 @@ export function computeBmOfficerPerformance(
             currentAge: r.currentAge || 0,
           }))
       : trackedContracts
-          .filter((c) =>
-            role === 'MO'
-              ? isMarketingOfficeType(c.officeType)
-              : !isMarketingOfficeType(c.officeType),
-          )
+          .filter((c) => matchesRole(c.officeType, c.recoveryOfficer || c.ro, c.marketingOfficer))
           .map((c) => ({
             officer: getOfficerByOfficeType(c),
             dueBudget: c.currentMonthDue || 0,
@@ -3728,11 +4298,12 @@ export function computeBelowThreeCollectionSnapshot(
     bucket.collectedAmount += coll;
 
     const officer = getOfficerByOfficeType(r);
-    const officeType = (r.officeType || '').trim().toUpperCase();
-    const role = officeType.includes('MO') ? 'MO' : officeType.includes('RO') ? 'RO' : officeType || 'RO';
+    const normRole = getNormalizedOfficerRole(r.officeType);
+    const role = normRole === 'MO' ? 'MO' : normRole === 'RO' ? 'RO' : (r.officeType || 'RO').trim().toUpperCase();
+    const offKey = `${role}::${officer.toLowerCase()}`;
 
     const off =
-      officerMap.get(officer) ?? {
+      officerMap.get(offKey) ?? {
         officer,
         role,
         totalCount: 0,
@@ -3774,7 +4345,7 @@ export function computeBelowThreeCollectionSnapshot(
     if (isPaid) offSub.paid += 1;
     else offSub.notPaid += 1;
 
-    officerMap.set(officer, off);
+    officerMap.set(offKey, off);
 
     allContractItems.push({
       contractNo: normalizeContractNo(r.contractNo),
@@ -3812,14 +4383,21 @@ export function computeBelowThreeCollectionSnapshot(
   >();
   if (bmDashboardBelowThree?.byOfficer?.length) {
     for (const row of bmDashboardBelowThree.byOfficer) {
-      bmOfficerLookup.set(row.officer.toLowerCase(), row);
+      if (row.role) {
+        bmOfficerLookup.set(`${row.role.toUpperCase()}::${row.officer.toLowerCase()}`, row);
+      }
+      if (!bmOfficerLookup.has(row.officer.toLowerCase())) {
+        bmOfficerLookup.set(row.officer.toLowerCase(), row);
+      }
     }
   }
 
   let bmOfficerMatchCount = 0;
   const byOfficer: BelowThreeOfficerRow[] = Array.from(officerMap.values())
     .map((o) => {
-      const bmOff = bmOfficerLookup.get(o.officer.toLowerCase());
+      const bmOff =
+        bmOfficerLookup.get(`${o.role.toUpperCase()}::${o.officer.toLowerCase()}`) ??
+        bmOfficerLookup.get(o.officer.toLowerCase());
       const effectiveDue = bmOff ? bmOff.targetAmount : o.dueAmount;
       const effectiveColl = bmOff ? bmOff.collectedAmount : o.collectedAmount;
       const effectiveTotalCount = bmOff?.totalCount ?? o.totalCount;
@@ -4018,17 +4596,20 @@ export function reconcileBelowThreeFromBmSnapshot(
 
   for (const r of aersRecords) {
     const off = getOfficerByOfficeType(r);
+    const normRole = getNormalizedOfficerRole(r.officeType);
+    const role = normRole === 'MO' ? 'MO' : 'RO';
+    const key = `${role}::${off.toLowerCase()}`;
     const due = Math.max(0, Number(r.dueBudgetMonth || r.currentMonthDue) || 0);
     const coll = Math.max(0, Number(r.totalCollection) || 0);
     const age = Number(r.currentAge) || 0;
     if (age >= 3.0) {
-      const cur = age3PlusByOff.get(off) ?? { count: 0, due: 0, coll: 0 };
+      const cur = age3PlusByOff.get(key) ?? { count: 0, due: 0, coll: 0 };
       cur.count += 1;
       cur.due += due;
       cur.coll += coll;
-      age3PlusByOff.set(off, cur);
+      age3PlusByOff.set(key, cur);
     } else {
-      const cur = aersB3ByOff.get(off) ?? {
+      const cur = aersB3ByOff.get(key) ?? {
         count: 0,
         paid: 0,
         notPaid: 0,
@@ -4067,7 +4648,7 @@ export function reconcileBelowThreeFromBmSnapshot(
       sub.total += 1;
       if (isPaid) sub.paid += 1;
       else sub.notPaid += 1;
-      aersB3ByOff.set(off, cur);
+      aersB3ByOff.set(key, cur);
     }
   }
 
@@ -4082,8 +4663,9 @@ export function reconcileBelowThreeFromBmSnapshot(
 
   const byOfficer: BelowThreeOfficerRow[] = allBmOfficers
     .map((bmOff) => {
-      const s3 = age3PlusByOff.get(bmOff.officer) ?? { count: 0, due: 0, coll: 0 };
-      const sb3 = aersB3ByOff.get(bmOff.officer);
+      const roleKey = `${bmOff.role}::${bmOff.officer.toLowerCase()}`;
+      const s3 = age3PlusByOff.get(roleKey) ?? { count: 0, due: 0, coll: 0 };
+      const sb3 = aersB3ByOff.get(roleKey);
       const b3Total = Math.max(0, bmOff.totalCount - s3.count);
       const b3Due = Math.max(0, Math.round(bmOff.dueBudget - s3.due));
       const b3Coll = Math.max(0, Math.round(bmOff.totalCollection - s3.coll));

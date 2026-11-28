@@ -18,6 +18,7 @@ import {
   extractBelowOneQuickWins,
   formatCompactRs,
   formatCurrencyRs,
+  getBranchPortfolioTotals,
   getOfficerByOfficeType,
   normalizeContractNo,
 } from '../utils/recoveryEngine';
@@ -56,20 +57,12 @@ export function BelowOneRatioPanel({
 
   // Compute branch-wide 90 Ratio (Below 1 / Total Contracts * 100)
   const branchRatio = useMemo(() => {
-    const totalContracts =
-      bm?.totalContracts ??
-      (bm?.ageBuckets?.reduce((s, b) => s + b.count, 0) || aersRecords.length);
-    const belowOneCount =
-      bm?.belowOneCount ??
-      (bm?.ageBuckets
-        ? (bm.ageBuckets[0]?.count || 0) + (bm.ageBuckets[1]?.count || 0)
-        : aersRecords.filter((r) => (r.currentAge || 0) <= 1.0).length);
-    const ratio90Pct =
-      totalContracts > 0
-        ? Math.round((belowOneCount / totalContracts) * 1000) / 10
-        : 0;
+    const portfolio = getBranchPortfolioTotals(aersMeta, aersRecords, 'ALL');
+    const totalContracts = portfolio.totalContracts;
+    const belowOneCount = portfolio.belowOneCount;
+    const ratio90Pct = portfolio.ratio90Pct;
     const targetCount = Math.ceil(totalContracts * 0.9);
-    const contractsNeeded = Math.max(0, targetCount - belowOneCount);
+    const contractsNeeded = portfolio.neededFor90;
     const gapPct = Math.max(0, Math.round((90 - ratio90Pct) * 10) / 10);
 
     return {
@@ -80,7 +73,7 @@ export function BelowOneRatioPanel({
       contractsNeeded,
       gapPct,
     };
-  }, [bm, aersRecords]);
+  }, [aersMeta, aersRecords]);
 
   // All 1.01 - 1.99 quick-win contracts (prefer full workbook snapshot if present, else live AERS)
   const quickWins = useMemo<BelowOneQuickWinItem[]>(() => {

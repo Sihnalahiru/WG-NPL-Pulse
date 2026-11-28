@@ -14,7 +14,6 @@ import {
   Crop,
   Database,
   Flame,
-  Globe,
   HardDriveDownload,
   History,
   Landmark,
@@ -35,6 +34,7 @@ import {
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { AersLookupPanel } from './components/AersLookupPanel';
 import { AlertsNotificationsPanel } from './components/AlertsNotificationsPanel';
+import { AnalyticsAllInOneReportBar } from './components/AnalyticsAllInOneReportBar';
 import { AnalyticsCharts } from './components/AnalyticsCharts';
 import { BackupSettingsPanel } from './components/BackupSettingsPanel';
 import { BelowOneRatioPanel } from './components/BelowOneRatioPanel';
@@ -58,7 +58,7 @@ import { UploadHistoryPanel } from './components/UploadHistoryPanel';
 import { WeeklyBackupPromptModal } from './components/WeeklyBackupPromptModal';
 import { WorstCasePanel } from './components/WorstCasePanel';
 import { XpRewardsHubPanel } from './components/XpRewardsHubPanel';
-import { useLanguage, type AppLanguage } from './contexts/LanguageContext';
+import { useLanguage } from './contexts/LanguageContext';
 import type {
   AersMetadata,
   AersRecord,
@@ -80,6 +80,7 @@ import {
   captureSystemActiveDateTime,
   computeOfficeTypeBreakdown,
   formatCompactRs,
+  getBranchPortfolioTotals,
   getDaysRemainingTo30th,
   getMonth30thLabel,
   getOfficerByOfficeType,
@@ -956,7 +957,7 @@ interface ToastBanner {
 }
 
 export default function App() {
-  const { lang, setLang, t } = useLanguage();
+  const { t } = useLanguage();
   const [isDark, setIsDark] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.THEME);
@@ -1472,15 +1473,23 @@ export default function App() {
     }
   }, [visibleAersRecords]);
 
+  const branchPortfolio = useMemo(
+    () => getBranchPortfolioTotals(aersMeta, aersRecords, selectedOfficer),
+    [aersMeta, aersRecords, selectedOfficer],
+  );
+
+  const fullBranchPortfolio = useMemo(
+    () => getBranchPortfolioTotals(aersMeta, aersRecords, 'ALL'),
+    [aersMeta, aersRecords],
+  );
+
   const aersAlertSummary = useMemo(() => {
     let dpd91Danger = 0;
     let zeroEffortBorderline = 0;
     let newlySlippedNpl = 0;
     let worst = 0;
-    let belowOne = 0;
 
     for (const r of visibleAersRecords) {
-      if ((r.currentAge || 0) <= 1.0) belowOne += 1;
       const isBorderline = isBorderlineNplAccount({
         actualDpd: r.actualDpd,
         opAge: r.opAge,
@@ -1505,22 +1514,14 @@ export default function App() {
       if (isWorstCategory(r.nplReason, r.worstCaseProduct)) worst += 1;
     }
 
-    const bm = selectedOfficer === 'ALL' ? aersMeta?.bmBranchSnapshot : undefined;
-    const ratio90Pct: number =
-      typeof bm?.ratio90Pct === 'number' && bm.ratio90Pct > 0
-        ? bm.ratio90Pct
-        : visibleAersRecords.length > 0
-          ? (belowOne / visibleAersRecords.length) * 100
-          : 0;
-
     return {
       dpd91Danger,
       zeroEffortBorderline,
       newlySlippedNpl,
       worst,
-      ratio90Pct,
+      ratio90Pct: branchPortfolio.ratio90Pct,
     };
-  }, [visibleAersRecords, aersMeta, selectedOfficer]);
+  }, [visibleAersRecords, branchPortfolio]);
 
   const urgentAlertsCount =
     aersAlertSummary.dpd91Danger +
@@ -1773,10 +1774,11 @@ export default function App() {
       timeZone: activeSys.timeZone,
       excelPrintedDateTime: stampedMeta.excelPrintedDateTime,
       recordsCount: cleanParsedRecords.length,
-      totalPortfolioCount:
-        stampedMeta.bmBranchSnapshot?.totalContracts ??
-        dailySnapshot.totalPortfolioCount ??
-        cleanParsedRecords.length,
+      totalPortfolioCount: getBranchPortfolioTotals(
+        stampedMeta,
+        cleanParsedRecords,
+        'ALL',
+      ).totalContracts,
       nplCount:
         stampedMeta.bmBranchSnapshot?.closingNplCount ??
         dailySnapshot.closingNplCount,
@@ -2159,8 +2161,11 @@ export default function App() {
         systemDateTimeLabel: activeSys.displayLabel,
         timeZone: activeSys.timeZone,
         recordsCount: restoredAersCount,
-        totalPortfolioCount:
-          nextMeta?.bmBranchSnapshot?.totalContracts ?? restoredAersCount,
+        totalPortfolioCount: getBranchPortfolioTotals(
+          nextMeta,
+          nextAers,
+          'ALL',
+        ).totalContracts,
         snapshotAction: `Restored ${restoredSnapCount} snapshots`,
         cloudSyncStatus: canPublish ? 'published_live' : 'local_only',
         cloudSyncNote: canPublish
@@ -2233,8 +2238,11 @@ export default function App() {
       timeZone: activeSys.timeZone,
       excelPrintedDateTime: aersMeta?.excelPrintedDateTime,
       recordsCount: aersRecords.length,
-      totalPortfolioCount:
-        aersMeta?.bmBranchSnapshot?.totalContracts ?? aersRecords.length,
+      totalPortfolioCount: getBranchPortfolioTotals(
+        aersMeta,
+        aersRecords,
+        'ALL',
+      ).totalContracts,
       nplCount: aersMeta?.bmBranchSnapshot?.closingNplCount,
       closingNplAmount: aersMeta?.bmBranchSnapshot?.totalClosingNpl,
       snapshotAction: 'Manual live broadcast to all users',
@@ -2486,7 +2494,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setMobileMenuOpen(true)}
-            aria-label="Open menu, language and quick controls"
+            aria-label="Open menu and quick controls"
             className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded-xl border border-red-200 dark:border-red-900/70 bg-red-50/80 dark:bg-red-950/40 text-red-700 dark:text-red-300 active:scale-95 transition-transform"
           >
             <Menu className="w-4 h-4" />
@@ -2495,34 +2503,6 @@ export default function App() {
 
         {/* Desktop / Web Full Right Utility Zone */}
         <div className="hidden md:flex items-center gap-1.5 lg:gap-2 shrink-0" data-snapshot-ignore="true">
-          {/* Trilingual Switcher: English · සිංහල · தமிழ் */}
-          <div
-            role="group"
-            aria-label="Language selector"
-            className="inline-flex items-center p-0.5 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-100/80 dark:bg-zinc-900"
-          >
-            <Globe className="w-3.5 h-3.5 text-zinc-400 ml-1.5 mr-1 hidden xl:block" />
-            {(
-              [
-                { code: 'en', label: 'EN' },
-                { code: 'si', label: 'සිං' },
-                { code: 'ta', label: 'தமி' },
-              ] as { code: AppLanguage; label: string }[]
-            ).map((opt) => (
-              <button
-                key={opt.code}
-                type="button"
-                onClick={() => setLang(opt.code)}
-                className={`px-2 py-1 text-[11px] font-bold rounded-lg transition-colors ${
-                  lang === opt.code
-                    ? 'bg-red-700 text-white shadow-xs'
-                    : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
 
           <button
             type="button"
@@ -2677,9 +2657,9 @@ export default function App() {
             </span>
             <span aria-hidden="true" className="hidden sm:inline">·</span>
             <span className="hidden sm:inline shrink-0">
-              AERS Indexed:{' '}
-              <span className="font-mono text-zinc-900 dark:text-zinc-200">
-                {visibleAersRecords.length.toLocaleString()}
+              Branch Contracts:{' '}
+              <span className="font-mono font-semibold text-zinc-900 dark:text-zinc-200">
+                {branchPortfolio.totalContracts.toLocaleString()}
               </span>
             </span>
           </div>
@@ -2951,6 +2931,7 @@ export default function App() {
                   aersRecords={visibleAersRecords}
                   aersMeta={aersMeta}
                   mrpMap={mrpMap}
+                  selectedOfficer={selectedOfficer}
                   isFilteredOfficer={selectedOfficer !== 'ALL'}
                   animKey={animKey}
                 />
@@ -3015,7 +2996,7 @@ export default function App() {
           {activeNav === 'below_one' && (
             <SectionSafeBoundary name="Below 1 — 90 Ratio Plan" resetKey={animKey}>
               <BelowOneRatioPanel
-                aersRecords={visibleAersRecords}
+                aersRecords={aersRecords}
                 aersMeta={aersMeta}
                 mrpMap={mrpMap}
               />
@@ -3025,7 +3006,7 @@ export default function App() {
           {activeNav === 'below_three' && (
             <SectionSafeBoundary name="Below 3 Collection & Variance" resetKey={animKey}>
               <BelowThreeCollectionPanel
-                aersRecords={visibleAersRecords}
+                aersRecords={aersRecords}
                 aersMeta={aersMeta}
                 mrpMap={mrpMap}
                 isDark={isDark}
@@ -3088,6 +3069,16 @@ export default function App() {
 
           {activeNav === 'tools' && (
             <div className="space-y-6">
+              <SectionSafeBoundary name="All-in-One Total Reports Export" resetKey={animKey}>
+                <AnalyticsAllInOneReportBar
+                  aersRecords={aersRecords}
+                  aersMeta={aersMeta}
+                  mrpMap={mrpMap}
+                  monthlySnapshots={monthlySnapshots}
+                  onNotify={showToast}
+                />
+              </SectionSafeBoundary>
+
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div
                   role="tablist"
@@ -3132,8 +3123,9 @@ export default function App() {
               {toolsSubTab === 'office_breakdown' && (
                 <SectionSafeBoundary name="Office Type Breakdown" resetKey={animKey}>
                   <OfficeTypeBreakdownPanel
-                    aersRecords={visibleAersRecords}
-                    title="Office Type -> Officer Strategy Breakdown (NPL & Borderline)"
+                    aersRecords={aersRecords}
+                    aersMeta={aersMeta}
+                    title="Office Type (RO / MO) -> Officer Strategy Breakdown"
                   />
                 </SectionSafeBoundary>
               )}
@@ -3141,7 +3133,7 @@ export default function App() {
               {toolsSubTab === 'bm_analytics' && (
                 <SectionSafeBoundary name="BM Portfolio Analytics" resetKey={animKey}>
                   <BmPortfolioAnalyticsPanel
-                    aersRecords={visibleAersRecords}
+                    aersRecords={aersRecords}
                     aersMeta={aersMeta}
                     mrpMap={mrpMap}
                     monthlySnapshots={monthlySnapshots}
@@ -3270,7 +3262,7 @@ export default function App() {
                 WG Pulse · {t('brandSubtitle')}
               </div>
               <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Mobile &amp; Web Live Sync · Below 1 (90 Ratio) · Below 3 Collection · XP Rewards · Trilingual EN / සිංහල / தமிழ்
+                Mobile &amp; Web Live Sync · RO &amp; MO Portfolio · Below 1 (90 Ratio) · Below 3 Collection · All-in-One Reports
               </div>
             </div>
           </div>
@@ -3283,9 +3275,9 @@ export default function App() {
               </strong>
             </span>
             <span>
-              AERS Indexed:{' '}
+              Branch Total:{' '}
               <strong className="font-mono text-zinc-900 dark:text-zinc-200">
-                {aersRecords.length.toLocaleString()}
+                {fullBranchPortfolio.totalContracts.toLocaleString()}
               </strong>
             </span>
             <span>
@@ -3336,8 +3328,6 @@ export default function App() {
         menuOpen={mobileMenuOpen}
         onOpenMenu={() => setMobileMenuOpen(true)}
         onCloseMenu={() => setMobileMenuOpen(false)}
-        lang={lang}
-        onChangeLang={setLang}
         isDark={isDark}
         onToggleDark={() => setIsDark((prev) => !prev)}
         isAdmin={isAdmin}

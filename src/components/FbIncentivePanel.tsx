@@ -11,7 +11,11 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import type { AersMetadata, AersRecord } from '../types/recovery';
-import { formatCompactRs, getOfficerByOfficeType } from '../utils/recoveryEngine';
+import {
+  formatCompactRs,
+  getBranchPortfolioTotals,
+  getOfficerByOfficeType,
+} from '../utils/recoveryEngine';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface FbIncentivePanelProps {
@@ -40,13 +44,9 @@ export function FbIncentivePanel({ aersRecords, aersMeta }: FbIncentivePanelProp
       if ((r.currentAge || 0) <= 1.0) belowOne += 1;
     });
 
-    const totalContracts = bm?.totalContracts || aersRecords.length;
-    const ratio90 =
-      typeof bm?.ratio90Pct === 'number' && bm.ratio90Pct > 0
-        ? bm.ratio90Pct
-        : totalContracts > 0
-          ? Math.round((belowOne / totalContracts) * 1000) / 10
-          : 0;
+    const portfolio = getBranchPortfolioTotals(aersMeta, aersRecords, 'ALL');
+    const totalContracts = portfolio.totalContracts;
+    const ratio90 = portfolio.ratio90Pct;
     const collPct =
       bm && (bm.roPerformance.length > 0 || bm.moPerformance.length > 0)
         ? (() => {

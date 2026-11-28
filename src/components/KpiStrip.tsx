@@ -15,6 +15,7 @@ import {
   analyzeNextMonthBorderline,
   formatCompactRs,
   formatCurrencyRs,
+  getBranchPortfolioTotals,
   getCapitalNplExposure,
   getDaysRemainingTo30th,
   getMonth30thLabel,
@@ -31,6 +32,7 @@ interface KpiStripProps {
   aersMeta?: AersMetadata | null;
   mrpMap?: Map<string, MrpEnrichment>;
   isFilteredOfficer?: boolean;
+  selectedOfficer?: string;
   animKey?: number;
 }
 
@@ -39,6 +41,7 @@ export function KpiStrip({
   aersMeta = null,
   mrpMap,
   isFilteredOfficer = false,
+  selectedOfficer = 'ALL',
   animKey = 0,
 }: KpiStripProps) {
   const [secondsLeft, setSecondsLeft] = useState(() => {
@@ -105,24 +108,13 @@ export function KpiStrip({
       } as never),
     ).length;
 
-    // Below 1 (<= 1.00) 90 Ratio — use full branch BM snapshot when viewing entire branch
-    const bm = !isFilteredOfficer ? aersMeta?.bmBranchSnapshot : undefined;
-    const totalPortfolioCount =
-      bm?.totalContracts ??
-      (bm?.ageBuckets?.reduce((s, b) => s + b.count, 0) || aersRecords.length);
-    const belowOneCount =
-      bm?.belowOneCount ??
-      (bm?.ageBuckets
-        ? (bm.ageBuckets[0]?.count || 0) + (bm.ageBuckets[1]?.count || 0)
-        : aersRecords.filter((r) => (r.currentAge || 0) <= 1.0).length);
-    const ratio90Pct =
-      totalPortfolioCount > 0
-        ? Math.round((belowOneCount / totalPortfolioCount) * 1000) / 10
-        : 0;
-    const neededFor90 = Math.max(
-      0,
-      Math.ceil(totalPortfolioCount * 0.9) - belowOneCount,
-    );
+    // Below 1 (<= 1.00) 90 Ratio & Portfolio Totals — reconcile with BM snapshot for both full branch AND individual RO/MO
+    const effectiveOfficer = isFilteredOfficer ? selectedOfficer : 'ALL';
+    const portfolio = getBranchPortfolioTotals(aersMeta, aersRecords, effectiveOfficer);
+    const totalPortfolioCount = portfolio.totalContracts;
+    const belowOneCount = portfolio.belowOneCount;
+    const ratio90Pct = portfolio.ratio90Pct;
+    const neededFor90 = portfolio.neededFor90;
 
     const netNplMovement = totalClosingNpl - totalOpNpl;
     const netCountDelta = closingNplCount - openingNplCount;
@@ -145,7 +137,7 @@ export function KpiStrip({
       netCountDelta,
       movementImproved,
     };
-  }, [aersRecords, aersMeta, mrpMap, isFilteredOfficer]);
+  }, [aersRecords, aersMeta, mrpMap, isFilteredOfficer, selectedOfficer]);
 
   const animatedClosingNpl = useCountUp(metrics.totalClosingNpl, 900, animKey);
   const animatedBorderline = useCountUp(metrics.borderlineProjectedNplExposure, 900, animKey);

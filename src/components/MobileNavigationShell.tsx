@@ -5,7 +5,6 @@ import {
   Briefcase,
   Camera,
   Cloud,
-  Globe,
   Landmark,
   LayoutGrid,
   Lock,
@@ -17,7 +16,6 @@ import {
   X,
 } from 'lucide-react';
 import type { NavSection } from '../types/recovery';
-import type { AppLanguage } from '../contexts/LanguageContext';
 import { PWAInstallButton } from './PWAInstallButton';
 
 export interface MobileNavItem {
@@ -36,8 +34,6 @@ interface MobileNavigationShellProps {
   menuOpen: boolean;
   onOpenMenu: () => void;
   onCloseMenu: () => void;
-  lang: AppLanguage;
-  onChangeLang: (lang: AppLanguage) => void;
   isDark: boolean;
   onToggleDark: () => void;
   isAdmin: boolean;
@@ -78,8 +74,6 @@ export function MobileNavigationShell({
   menuOpen,
   onOpenMenu,
   onCloseMenu,
-  lang,
-  onChangeLang,
   isDark,
   onToggleDark,
   isAdmin,
@@ -319,55 +313,31 @@ export function MobileNavigationShell({
                   </div>
                 </div>
 
-                {/* Language & Appearance Controls */}
+                {/* Display Appearance Control */}
                 <div className="space-y-2.5 pt-1 border-t border-zinc-200/80 dark:border-zinc-800/80">
                   <div className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 px-1 pt-2">
-                    Language &amp; Display
+                    Display Theme
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div
-                      role="group"
-                      aria-label="Mobile language selector"
-                      className="flex-1 grid grid-cols-3 gap-1 p-1 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-100/80 dark:bg-zinc-900"
-                    >
-                      {(
-                        [
-                          { code: 'en', label: 'English' },
-                          { code: 'si', label: 'සිංහල' },
-                          { code: 'ta', label: 'தமிழ்' },
-                        ] as { code: AppLanguage; label: string }[]
-                      ).map((opt) => (
-                        <button
-                          key={opt.code}
-                          type="button"
-                          onClick={() => onChangeLang(opt.code)}
-                          className={`min-h-[40px] px-2 text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1 ${
-                            lang === opt.code
-                              ? 'bg-red-700 text-white shadow-xs'
-                              : 'text-zinc-600 dark:text-zinc-400'
-                          }`}
-                        >
-                          <Globe className="w-3 h-3 shrink-0 opacity-75" />
-                          <span className="truncate">{opt.label}</span>
-                        </button>
-                      ))}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={onToggleDark}
-                      aria-label={
-                        isDark ? 'Switch to light mode' : 'Switch to dark mode'
-                      }
-                      className="min-w-[48px] min-h-[48px] flex items-center justify-center rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 active:scale-95 transition-transform shrink-0"
-                    >
+                  <button
+                    type="button"
+                    onClick={onToggleDark}
+                    aria-label={
+                      isDark ? 'Switch to light mode' : 'Switch to dark mode'
+                    }
+                    className="w-full min-h-[46px] flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-xs font-semibold text-zinc-800 dark:text-zinc-200 active:scale-[0.99] transition-transform"
+                  >
+                    <span className="flex items-center gap-2">
                       {isDark ? (
-                        <Sun className="w-5 h-5 text-amber-400" />
+                        <Sun className="w-4 h-4 text-amber-400" />
                       ) : (
-                        <Moon className="w-5 h-5 text-zinc-600" />
+                        <Moon className="w-4 h-4 text-zinc-600" />
                       )}
-                    </button>
-                  </div>
+                      <span>{isDark ? 'Dark Mode Active' : 'Light Mode Active'}</span>
+                    </span>
+                    <span className="text-[11px] font-medium text-red-700 dark:text-red-400">
+                      Switch to {isDark ? 'Light' : 'Dark'}
+                    </span>
+                  </button>
                 </div>
 
                 {/* Quick Actions (Sync, Snap Export, Upload AERS, Admin, Install App) */}
