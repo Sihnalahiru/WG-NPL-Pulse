@@ -4,12 +4,15 @@ import {
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
+  CalendarClock,
   CheckCircle2,
   Clock,
   ClipboardCheck,
+  History,
   Layers,
   PhoneCall,
   Plus,
+  Save,
   Search,
   Trash2,
   TrendingDown,
@@ -19,10 +22,13 @@ import {
   X,
 } from 'lucide-react';
 import {
+  Area,
   Bar,
   BarChart,
   CartesianGrid,
+  ComposedChart,
   Legend,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -31,6 +37,7 @@ import {
 import {
   STAFF_FOLLOWUP_NAMES,
   type AersRecord,
+  type MonthlySnapshot,
   type MrpEnrichment,
   type StaffAssignedContract,
 } from '../types/recovery';
@@ -42,6 +49,8 @@ import {
   isWorstCategory,
   normalizeContractNo,
 } from '../utils/recoveryEngine';
+import { useLanguage } from '../contexts/LanguageContext';
+import { OfficerPerformanceHeatmap } from './OfficerPerformanceHeatmap';
 import { PaymentPatternStrip } from './PaymentPatternStrip';
 import { UserAvatar } from './UserAvatar';
 import { WorstCaseProductBadge } from './WorstCaseProductBadge';
@@ -50,10 +59,13 @@ interface StaffFollowUpMonitorPanelProps {
   aersRecords: AersRecord[];
   mrpMap?: Map<string, MrpEnrichment>;
   assignments: StaffAssignedContract[];
+  monthlySnapshots?: MonthlySnapshot[];
   isDark: boolean;
+  isAdmin?: boolean;
   onAssignBulk: (newItems: StaffAssignedContract[]) => void;
   onRemoveAssignment: (staffName: string, monthKey: string, contractNo: string) => void;
   onClearStaffMonth: (staffName: string, monthKey: string) => void;
+  onLogTodaySnapshot?: () => void;
 }
 
 interface EvaluatedStaffContract {
@@ -128,11 +140,16 @@ export function StaffFollowUpMonitorPanel({
   aersRecords,
   mrpMap,
   assignments,
+  monthlySnapshots = [],
   isDark,
+  isAdmin = false,
   onAssignBulk,
   onRemoveAssignment,
   onClearStaffMonth,
+  onLogTodaySnapshot,
 }: StaffFollowUpMonitorPanelProps) {
+  const { t } = useLanguage();
+  const [activeTab, setActiveTab] = useState<'overview' | 'history'>('overview');
   const [selectedMonth, setSelectedMonth] = useState<string>(() => getDefaultMonthKey());
   const [assignStaff, setAssignStaff] = useState<string>(STAFF_FOLLOWUP_NAMES[0]);
   const [bulkInput, setBulkInput] = useState('');
@@ -477,70 +494,612 @@ export function StaffFollowUpMonitorPanel({
     modalPage * PAGE_SIZE,
   );
 
-  const axisColor = isDark ? '#94a3b8' : '#64748b';
-  const gridColor = isDark ? '#1e293b' : '#e2e8f0';
-  const tooltipBg = isDark ? '#0f172a' : '#ffffff';
-  const tooltipBorder = isDark ? '#334155' : '#e2e8f0';
+  const historyTimeline = useMemo(() => {
+    const todayIso = getTodayISO();
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 30);
+    const cutoffIso = cutoffDate.toISOString().slice(0, 10);
+
+    interface DailyHistoryRow {
+      date: string;
+      shortDate: string;
+      officerScope: string;
+      assignedCount: number;
+      paidCount: number;
+      pendingCount: number;
+      totalDue: number;
+      totalCollection: number;
+      totalCollectionK: number;
+      collectionPct: number;
+      avgClosingAge: number;
+      assignEfforts: number;
+      dayDelta: number | null;
+      source: 'snapshot' | 'live' | 'branch_est';
+    }
+
+    const rawRows: Omit<DailyHistoryRow, 'dayDelta'>[] = [];
+    const seenDates = new Set<string>();
+
+    const recentSnapshots = [...monthlySnapshots]
+      .filter((s) => s.snapshotDate && s.snapshotDate >= cutoffIso)
+      .sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+
+    for (const snap of recentSnapshots) {
+      const dateStr = snap.snapshotDate;
+      const shortDate = dateStr.length >= 10 ? dateStr.slice(5) : dateStr;
+      const staffStatsMap = snap.staffDailyStats;
+
+      if (staffStatsMap && Object.keys(staffStatsMap).length > 0) {
+        if (filterStaff === 'ALL') {
+          const allEntries = Object.values(staffStatsMap);
+          const assignedCount = allEntries.reduce((s, e) => s + e.assignedCount, 0);
+          const paidCount = allEntries.reduce((s, e) => s + e.paidCount, 0);
+          const pendingCount = allEntries.reduce((s, e) => s + e.pendingCount, 0);
+          const totalDue = allEntries.reduce((s, e) => s + e.totalDue, 0);
+          const totalCollection = allEntries.reduce((s, e) => s + e.totalCollection, 0);
+          const assignEfforts = allEntries.reduce((s, e) => s + e.assignEfforts, 0);
+          const avgClosingAge =
+            assignedCount > 0
+              ? Number(
+                  (
+                    allEntries.reduce(
+                      (s, e) => s + e.avgClosingAge * e.assignedCount,
+                      0,
+                    ) / assignedCount
+                  ).toFixed(2),
+                )
+              : 0;
+          const collectionPct =
+            totalDue > 0 ? Math.round((totalCollection / totalDue) * 100) : 0;
+
+          rawRows.push({
+            date: dateStr,
+            shortDate,
+            officerScope: `All Assigned (${allEntries.filter((e) => e.assignedCount > 0).length})`,
+            assignedCount,
+            paidCount,
+            pendingCount,
+            totalDue,
+            totalCollection,
+            totalCollectionK: Number((totalCollection / 1000).toFixed(1)),
+            collectionPct,
+            avgClosingAge,
+            assignEfforts,
+            source: 'snapshot',
+          });
+          seenDates.add(dateStr);
+        } else {
+          const entry = staffStatsMap[filterStaff];
+          if (entry) {
+            rawRows.push({
+              date: dateStr,
+              shortDate,
+              officerScope: filterStaff,
+              assignedCount: entry.assignedCount,
+              paidCount: entry.paidCount,
+              pendingCount: entry.pendingCount,
+              totalDue: entry.totalDue,
+              totalCollection: entry.totalCollection,
+              totalCollectionK: Number((entry.totalCollection / 1000).toFixed(1)),
+              collectionPct: entry.collectionPct,
+              avgClosingAge: entry.avgClosingAge,
+              assignEfforts: entry.assignEfforts,
+              source: 'snapshot',
+            });
+            seenDates.add(dateStr);
+          }
+        }
+      } else if (filterStaff === 'ALL' && snap.collectionPct > 0) {
+        const estColl = Math.round((kpiTotals.totalDue * snap.collectionPct) / 100);
+        rawRows.push({
+          date: dateStr,
+          shortDate,
+          officerScope: 'Branch Historical Snapshot',
+          assignedCount: kpiTotals.assigned || snap.trackedCount,
+          paidCount: Math.round(((kpiTotals.assigned || 0) * snap.collectionPct) / 100),
+          pendingCount: Math.max(
+            0,
+            (kpiTotals.assigned || 0) -
+              Math.round(((kpiTotals.assigned || 0) * snap.collectionPct) / 100),
+          ),
+          totalDue: kpiTotals.totalDue,
+          totalCollection: estColl,
+          totalCollectionK: Number((estColl / 1000).toFixed(1)),
+          collectionPct: Math.round(snap.collectionPct),
+          avgClosingAge: Number(kpiTotals.avgClosingAge.toFixed(2)),
+          assignEfforts: 0,
+          source: 'branch_est',
+        });
+        seenDates.add(dateStr);
+      }
+    }
+
+    if (!seenDates.has(todayIso) && kpiTotals.assigned > 0) {
+      const liveEfforts =
+        filterStaff === 'ALL'
+          ? staffStatsList.reduce((s, st) => s + st.assignEfforts, 0)
+          : staffStatsList.find((st) => st.staffName === filterStaff)?.assignEfforts ?? 0;
+
+      rawRows.push({
+        date: todayIso,
+        shortDate: todayIso.slice(5),
+        officerScope: filterStaff === 'ALL' ? 'All Assigned (Live)' : filterStaff,
+        assignedCount: kpiTotals.assigned,
+        paidCount: kpiTotals.paid,
+        pendingCount: kpiTotals.pending,
+        totalDue: kpiTotals.totalDue,
+        totalCollection: kpiTotals.totalCollection,
+        totalCollectionK: Number((kpiTotals.totalCollection / 1000).toFixed(1)),
+        collectionPct: kpiTotals.collectionPct,
+        avgClosingAge: Number(kpiTotals.avgClosingAge.toFixed(2)),
+        assignEfforts: liveEfforts,
+        source: 'live',
+      });
+    }
+
+    rawRows.sort((a, b) => a.date.localeCompare(b.date));
+
+    return rawRows.map((row, idx): DailyHistoryRow => {
+      const prev = idx > 0 ? rawRows[idx - 1] : null;
+      return {
+        ...row,
+        dayDelta: prev ? row.totalCollection - prev.totalCollection : null,
+      };
+    });
+  }, [monthlySnapshots, filterStaff, kpiTotals, staffStatsList]);
+
+  const historySummary = useMemo(() => {
+    if (historyTimeline.length === 0) {
+      return {
+        daysLogged: 0,
+        latestCollection: 0,
+        latestPct: 0,
+        peakCollection: 0,
+        peakDate: '—',
+        periodGrowth: 0,
+      };
+    }
+    const first = historyTimeline[0];
+    const latest = historyTimeline[historyTimeline.length - 1];
+    let peak = first;
+    for (const row of historyTimeline) {
+      if (row.totalCollection >= peak.totalCollection) peak = row;
+    }
+    return {
+      daysLogged: historyTimeline.length,
+      latestCollection: latest.totalCollection,
+      latestPct: latest.collectionPct,
+      peakCollection: peak.totalCollection,
+      peakDate: peak.date,
+      periodGrowth: latest.totalCollection - first.totalCollection,
+    };
+  }, [historyTimeline]);
+
+  const axisColor = isDark ? '#a1a1aa' : '#52525b';
+  const gridColor = isDark ? '#27272a' : '#e4e4e7';
+  const tooltipBg = isDark ? '#18181b' : '#ffffff';
+  const tooltipBorder = isDark ? '#3f3f46' : '#e4e4e7';
 
   return (
     <div className="space-y-6">
       {/* Header Toolbar */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <ClipboardCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <h2 className="font-display text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100">
-              Assign User Follow-Up &amp; Performance Dashboard
-            </h2>
+      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <ClipboardCheck className="w-4 h-4 text-red-700 dark:text-red-400 shrink-0" />
+              <h2 className="font-display text-base sm:text-lg font-bold text-zinc-900 dark:text-zinc-100">
+                Assign User Follow-Up &amp; Performance Dashboard
+              </h2>
+            </div>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 max-w-3xl leading-relaxed">
+              Assign bulk contracts (250+ supported) to your 10 Assign Users, inspect contract-level popups, or audit 30-day chronological collection history.
+            </p>
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-3xl leading-relaxed">
-            Assign bulk contracts (250+ supported) to your 10 Assign Users. Dashboard shows clean breakdown metrics; click any user&apos;s Name Card to open their contract-level popup table.
-          </p>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <select
+              value={filterStaff}
+              onChange={(e) => setFilterStaff(e.target.value)}
+              aria-label="Filter dashboard by Assign User"
+              className="px-3 py-2 text-xs font-semibold rounded-lg border border-red-200 dark:border-red-900/70 bg-red-50/60 dark:bg-red-950/30 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-red-600"
+            >
+              <option value="ALL">Assign User: All ({STAFF_FOLLOWUP_NAMES.length})</option>
+              {STAFF_FOLLOWUP_NAMES.map((name) => (
+                <option key={name} value={name}>
+                  Assign User: {name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              aria-label="Select follow-up assignment month"
+              className="px-3 py-2 text-xs font-semibold rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-red-600"
+            >
+              {monthOptions.map((mk) => (
+                <option key={mk} value={mk}>
+                  Month: {formatMonthLabel(mk)}
+                </option>
+              ))}
+            </select>
+
+            {activeTab === 'overview' && (
+              <button
+                type="button"
+                onClick={() => setShowAssignForm((v) => !v)}
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                  showAssignForm
+                    ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                    : 'bg-red-700 text-white hover:bg-red-800'
+                }`}
+              >
+                <Plus className="w-3.5 h-3.5" />
+                {showAssignForm ? 'Hide Bulk Assign' : 'Assign Bulk Contracts'}
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <select
-            value={filterStaff}
-            onChange={(e) => setFilterStaff(e.target.value)}
-            aria-label="Filter dashboard by Assign User"
-            className="px-3 py-2 text-xs font-semibold rounded-lg border border-blue-300 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-950/40 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+        {/* Sub-Tab Bar: Overview vs Performance History (30d) */}
+        <div className="pt-3 border-t border-zinc-200/80 dark:border-zinc-800/80 flex flex-wrap items-center justify-between gap-3">
+          <div
+            role="tablist"
+            aria-label="Assign User Dashboard Tabs"
+            className="inline-flex items-center gap-1 p-1 rounded-xl bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800"
           >
-            <option value="ALL">Assign User: All ({STAFF_FOLLOWUP_NAMES.length})</option>
-            {STAFF_FOLLOWUP_NAMES.map((name) => (
-              <option key={name} value={name}>
-                Assign User: {name}
-              </option>
-            ))}
-          </select>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'overview'}
+              onClick={() => setActiveTab('overview')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                activeTab === 'overview'
+                  ? 'bg-red-700 text-white shadow-xs'
+                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              {t('tabOverviewCards')}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'history'}
+              onClick={() => setActiveTab('history')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                activeTab === 'history'
+                  ? 'bg-red-700 text-white shadow-xs'
+                  : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+              }`}
+            >
+              <History className="w-3.5 h-3.5" />
+              {t('tabPerfHistory')}
+              <span
+                className={`ml-0.5 px-1.5 py-0.5 text-[10px] font-mono rounded-md ${
+                  activeTab === 'history'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                }`}
+              >
+                {historyTimeline.length}d
+              </span>
+            </button>
+          </div>
 
-          <select
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            aria-label="Select follow-up assignment month"
-            className="px-3 py-2 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
-          >
-            {monthOptions.map((mk) => (
-              <option key={mk} value={mk}>
-                Month: {formatMonthLabel(mk)}
-              </option>
-            ))}
-          </select>
-
-          <button
-            type="button"
-            onClick={() => setShowAssignForm((v) => !v)}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
-              showAssignForm
-                ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
-                : 'bg-emerald-600 text-white hover:bg-emerald-700'
-            }`}
-          >
-            <Plus className="w-3.5 h-3.5" />
-            {showAssignForm ? 'Hide Bulk Assign' : 'Assign Bulk Contracts'}
-          </button>
+          {activeTab === 'history' && isAdmin && onLogTodaySnapshot && (
+            <button
+              type="button"
+              onClick={onLogTodaySnapshot}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-zinc-900 dark:bg-red-700 text-white hover:opacity-90 transition-opacity whitespace-nowrap"
+            >
+              <Save className="w-3.5 h-3.5" />
+              {t('logTodaySnapshot')}
+            </button>
+          )}
         </div>
       </div>
 
+      {activeTab === 'history' ? (
+        <div className="space-y-6">
+          {/* 30-Day Performance History KPI Strip */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 tabular-nums">
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5">
+              <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                Snapshots Logged (Last 30 Days)
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100">
+                  {historySummary.daysLogged}
+                </span>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">days</span>
+              </div>
+              <div className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                Scope: {filterStaff === 'ALL' ? 'All Assigned Officers' : filterStaff}
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5">
+              <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                Latest Logged Collection
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-xl font-bold font-mono text-emerald-700 dark:text-emerald-400">
+                  {formatCompactRs(historySummary.latestCollection)}
+                </span>
+                <span className="text-xs font-mono font-semibold text-zinc-700 dark:text-zinc-300">
+                  ({historySummary.latestPct}%)
+                </span>
+              </div>
+              <div className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                Most recent chronological record
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5">
+              <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                30-Day Peak Collection
+              </div>
+              <div className="mt-2 text-xl font-bold font-mono text-red-700 dark:text-red-400">
+                {formatCompactRs(historySummary.peakCollection)}
+              </div>
+              <div className="mt-1.5 text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
+                Peak Date: {historySummary.peakDate}
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5">
+              <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                30-Day Net Growth
+              </div>
+              <div
+                className={`mt-2 text-xl font-bold font-mono ${
+                  historySummary.periodGrowth >= 0
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : 'text-red-600 dark:text-red-400'
+                }`}
+              >
+                {historySummary.periodGrowth >= 0 ? '+' : ''}
+                {formatCompactRs(historySummary.periodGrowth)}
+              </div>
+              <div className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                First logged day → Latest day
+              </div>
+            </div>
+          </div>
+
+          {/* 30-Day Collection Trend Chart */}
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <div className="flex items-center gap-2">
+                <CalendarClock className="w-4 h-4 text-red-700 dark:text-red-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                    30-Day Daily Collection Trend — {filterStaff === 'ALL' ? 'All Assigned Officers' : filterStaff}
+                  </h3>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    Pulled from daily AERS snapshots (Rs. Thousands collected vs. Collection % achievement)
+                  </p>
+                </div>
+              </div>
+              <span className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
+                Rolling 30-day window
+              </span>
+            </div>
+
+            {historyTimeline.length === 0 ? (
+              <div className="py-12 text-center text-xs text-zinc-500 dark:text-zinc-400">
+                No historical daily snapshots found for this selection yet. Upload a daily AERS workbook or click{' '}
+                <strong>{t('logTodaySnapshot')}</strong> (Admin) to start tracking 30-day officer trends.
+              </div>
+            ) : (
+              <div className="h-72 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart
+                    data={historyTimeline}
+                    margin={{ top: 10, right: 16, left: 0, bottom: 4 }}
+                  >
+                    <defs>
+                      <linearGradient id="staffHistCollGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#b91c1c" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="#b91c1c" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
+                    <XAxis
+                      dataKey="shortDate"
+                      tick={{ fill: axisColor, fontSize: 11 }}
+                      axisLine={{ stroke: gridColor }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      yAxisId="left"
+                      tick={{ fill: axisColor, fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(v) => `${v}k`}
+                    />
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      domain={[0, 120]}
+                      tick={{ fill: axisColor, fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(v) => `${v}%`}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: tooltipBg,
+                        borderColor: tooltipBorder,
+                        borderRadius: '10px',
+                        fontSize: '12px',
+                      }}
+                      formatter={(value: unknown, name: unknown) => {
+                        const label = String(name);
+                        if (label.includes('%')) return [`${Number(value || 0)}%`, label];
+                        return [`Rs. ${Number(value || 0).toLocaleString()}k`, label];
+                      }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: '12px' }} />
+                    <Area
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey="totalCollectionK"
+                      name="Collected (Rs. k)"
+                      stroke="#b91c1c"
+                      strokeWidth={2.5}
+                      fill="url(#staffHistCollGrad)"
+                    />
+                    <Line
+                      yAxisId="right"
+                      type="monotone"
+                      dataKey="collectionPct"
+                      name="Collection %"
+                      stroke="#10b981"
+                      strokeWidth={2.5}
+                      dot={{ r: 3.5 }}
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+
+          {/* 30-Day Officer Collection Progress Heatmap (Recharts) */}
+          <OfficerPerformanceHeatmap
+            monthlySnapshots={monthlySnapshots}
+            staffLiveStats={staffStatsList}
+            selectedStaff={filterStaff}
+            isDark={isDark}
+            onSelectOfficer={(name) => setFilterStaff(name)}
+          />
+
+          {/* Chronological Daily Log Table */}
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                  Chronological Daily Collection Log (Last 30 Days)
+                </h3>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Day-by-day collection progression, paid ratio, and average closing age per assigned officer
+                </p>
+              </div>
+              <span className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
+                {historyTimeline.length} daily entries
+              </span>
+            </div>
+
+            {historyTimeline.length === 0 ? (
+              <div className="p-10 text-center text-xs text-zinc-500 dark:text-zinc-400">
+                No chronological records yet for {filterStaff === 'ALL' ? 'assigned officers' : filterStaff}.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="bg-zinc-50 dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
+                    <tr>
+                      <th className="py-2.5 px-4">Date</th>
+                      <th className="py-2.5 px-3">Assigned Officer</th>
+                      <th className="py-2.5 px-3 text-right">Assigned</th>
+                      <th className="py-2.5 px-3 text-right">Paid / Pending</th>
+                      <th className="py-2.5 px-3 text-right">Collection Achieved</th>
+                      <th className="py-2.5 px-3 text-right">Day Change</th>
+                      <th className="py-2.5 px-3 text-right">Coll %</th>
+                      <th className="py-2.5 px-3 text-right">Avg Age</th>
+                      <th className="py-2.5 px-4 text-right">Efforts / Tag</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 tabular-nums">
+                    {[...historyTimeline].reverse().map((row) => (
+                      <tr
+                        key={`${row.date}_${row.officerScope}`}
+                        className="hover:bg-zinc-50/70 dark:hover:bg-zinc-800/40"
+                      >
+                        <td className="py-2.5 px-4 font-mono font-semibold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">
+                          {row.date}
+                        </td>
+                        <td className="py-2.5 px-3 font-medium text-zinc-800 dark:text-zinc-200">
+                          {row.officerScope}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono text-zinc-700 dark:text-zinc-300">
+                          {row.assignedCount}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono whitespace-nowrap">
+                          <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                            {row.paidCount}P
+                          </span>
+                          <span className="text-zinc-400 mx-1">/</span>
+                          <span className="text-amber-700 dark:text-amber-400 font-semibold">
+                            {row.pendingCount}U
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">
+                          {formatCurrencyRs(row.totalCollection)}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono whitespace-nowrap">
+                          {row.dayDelta === null ? (
+                            <span className="text-zinc-400">Baseline</span>
+                          ) : row.dayDelta > 0 ? (
+                            <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                              +{formatCompactRs(row.dayDelta)}
+                            </span>
+                          ) : row.dayDelta < 0 ? (
+                            <span className="text-red-600 dark:text-red-400 font-semibold">
+                              {formatCompactRs(row.dayDelta)}
+                            </span>
+                          ) : (
+                            <span className="text-zinc-500">0</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono">
+                          <span
+                            className={`px-2 py-0.5 rounded-md font-semibold ${
+                              row.collectionPct >= 75
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                : row.collectionPct >= 45
+                                  ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
+                                  : 'bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300'
+                            }`}
+                          >
+                            {row.collectionPct}%
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono text-zinc-700 dark:text-zinc-300">
+                          {row.avgClosingAge.toFixed(2)}
+                        </td>
+                        <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                          <span className="font-mono text-zinc-700 dark:text-zinc-300 mr-2">
+                            {row.assignEfforts}
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                              row.source === 'live'
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                : row.source === 'snapshot'
+                                  ? 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
+                                  : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                            }`}
+                          >
+                            {row.source === 'live'
+                              ? 'Live'
+                              : row.source === 'snapshot'
+                                ? 'Locked'
+                                : 'Est'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <>
       {/* Bulk Assignment Form */}
       {showAssignForm && (
         <form
@@ -953,6 +1512,8 @@ export function StaffFollowUpMonitorPanel({
           })}
         </div>
       </div>
+        </>
+      )}
 
       {/* POPUP MODAL FOR SELECTED ASSIGN USER */}
       {modalStaff && (

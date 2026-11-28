@@ -28,12 +28,12 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: base,
-          name: 'WG Pulse — Leasing & Finance Recovery Control',
+          name: 'WG Pulse — Commercial Credit Recovery Control',
           short_name: 'WG Pulse',
           description:
-            'Installable desktop & mobile recovery control platform for AERS master lookup, DPD 91 borderline control, Below 1 (90 Ratio) planning, and Assign User performance.',
-          theme_color: '#047857',
-          background_color: '#0f172a',
+            'Commercial Credit installable desktop & mobile recovery control platform for AERS lookup, DPD 91 borderline control, Below 1 (90 Ratio), XP rewards, and FB Incentive.',
+          theme_color: '#b91c1c',
+          background_color: '#18181b',
           display: 'standalone',
           display_override: ['window-controls-overlay', 'standalone'],
           orientation: 'any',

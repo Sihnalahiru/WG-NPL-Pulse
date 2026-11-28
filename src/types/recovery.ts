@@ -23,6 +23,9 @@ export type NavSection =
   | 'below_one'
   | 'borderline'
   | 'worst'
+  | 'alerts'
+  | 'rewards'
+  | 'fb_incentive'
   | 'tools'
   | 'settings';
 
@@ -212,6 +215,21 @@ export interface TrackedContract {
   visitHistory: VisitLogEntry[];
 }
 
+export interface StaffDailySnapshotEntry {
+  staffName: string;
+  assignedCount: number;
+  paidCount: number;
+  pendingCount: number;
+  totalDue: number;
+  totalCollection: number;
+  collectionPct: number;
+  avgOpAge: number;
+  avgClosingAge: number;
+  reducingCount: number;
+  worseningCount: number;
+  assignEfforts: number;
+}
+
 export interface MonthlySnapshot {
   id: string;
   label: string;
@@ -237,6 +255,7 @@ export interface MonthlySnapshot {
   branchNpl?: number;
   branchCollectionPct?: number;
   sourceFile?: string;
+  staffDailyStats?: Record<string, StaffDailySnapshotEntry>;
 }
 
 export interface NotificationPreferences {

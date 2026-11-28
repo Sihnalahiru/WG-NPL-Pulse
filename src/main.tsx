@@ -2,6 +2,7 @@ import React, { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import App from './App';
+import { LanguageProvider } from './contexts/LanguageContext';
 import './index.css';
 
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
@@ -100,7 +101,9 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <StrictMode>
     <RootErrorBoundary>
-      <AppRoot />
+      <LanguageProvider>
+        <AppRoot />
+      </LanguageProvider>
     </RootErrorBoundary>
   </StrictMode>,
 );

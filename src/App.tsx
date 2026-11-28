@@ -1,28 +1,31 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
+  BadgeDollarSign,
   BarChart3,
   Bell,
   BellRing,
+  Briefcase,
   Building2,
   Camera,
   CheckCircle2,
-  ClipboardCheck,
   Cloud,
   Crop,
   Database,
   Flame,
+  Globe,
   HardDriveDownload,
-  Layers,
-  LayoutDashboard,
+  Landmark,
   Lock,
   Moon,
+  PieChart,
   RefreshCw,
-  Settings,
+  Scale,
   ShieldAlert,
   ShieldCheck,
+  SlidersHorizontal,
   Sun,
-  Target,
+  Trophy,
   Upload,
   X,
 } from 'lucide-react';
@@ -34,8 +37,8 @@ import { BackupSettingsPanel } from './components/BackupSettingsPanel';
 import { BelowOneRatioPanel } from './components/BelowOneRatioPanel';
 import { BmPortfolioAnalyticsPanel } from './components/BmPortfolioAnalyticsPanel';
 import { ExecutiveOfficerHubPanel } from './components/ExecutiveOfficerHubPanel';
+import { FbIncentivePanel } from './components/FbIncentivePanel';
 import strategyHeroImg from './assets/images/finance_strategy_hero_1795684833730.jpg';
-import { PulseLogoMark } from './components/FinanceIllustrations';
 import { KpiStrip } from './components/KpiStrip';
 import { NextMonthBorderlineCardsPanel } from './components/NextMonthBorderlineCardsPanel';
 import { OfficeTypeBreakdownPanel } from './components/OfficeTypeBreakdownPanel';
@@ -47,6 +50,8 @@ import {
   type SnapshotMode,
 } from './components/UniversalSnapshotManager';
 import { WorstCasePanel } from './components/WorstCasePanel';
+import { XpRewardsHubPanel } from './components/XpRewardsHubPanel';
+import { useLanguage, type AppLanguage } from './contexts/LanguageContext';
 import type {
   AersMetadata,
   AersRecord,
@@ -847,6 +852,7 @@ interface ToastBanner {
 }
 
 export default function App() {
+  const { lang, setLang, t } = useLanguage();
   const [isDark, setIsDark] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.THEME);
@@ -899,7 +905,7 @@ export default function App() {
 
   const [activeNav, setActiveNav] = useState<NavSection>('overview');
   const [toolsSubTab, setToolsSubTab] = useState<
-    'office_breakdown' | 'bm_analytics' | 'alerts'
+    'office_breakdown' | 'bm_analytics'
   >('office_breakdown');
   const [settingsSubTab, setSettingsSubTab] = useState<'lookup' | 'backup'>('lookup');
   const [mrpMap, setMrpMap] = useState<Map<string, MrpEnrichment>>(() => {
@@ -1472,7 +1478,11 @@ export default function App() {
 
     // Daily-keyed snapshot: same-day uploads overwrite today's snapshot with the latest file;
     // a new day locks the previous day's last upload and appends a fresh daily record.
-    const dailySnapshot = buildDailyAersSnapshot(cleanParsedRecords, parsed.metadata);
+    const dailySnapshot = buildDailyAersSnapshot(
+      cleanParsedRecords,
+      parsed.metadata,
+      staffAssignments,
+    );
     const existingIdx = monthlySnapshots.findIndex(
       (s) => s.snapshotDate === dailySnapshot.snapshotDate,
     );
@@ -1627,6 +1637,45 @@ export default function App() {
         ? `Cleared all staff assignments for ${monthKey}.`
         : `Cleared ${staffName}'s assignments for ${monthKey}.`,
       'info',
+    );
+  };
+
+  const handleLogTodayStaffSnapshot = () => {
+    if (!isAdmin) {
+      setAdminModalOpen(true);
+      return;
+    }
+    const todaySnap = buildDailyAersSnapshot(
+      aersRecords,
+      aersMeta ?? {
+        fileName: 'Manual Daily Snapshot',
+        printedDateTime: getTodayISO(),
+        uploadedAt: new Date().toISOString(),
+        totalContractsCount: aersRecords.length,
+        isSampleData: false,
+      },
+      staffAssignments,
+    );
+    const existingIdx = monthlySnapshots.findIndex(
+      (s) => s.snapshotDate === todaySnap.snapshotDate,
+    );
+    let nextSnapshots: MonthlySnapshot[];
+    if (existingIdx >= 0) {
+      nextSnapshots = [...monthlySnapshots];
+      nextSnapshots[existingIdx] = {
+        ...todaySnap,
+        id: nextSnapshots[existingIdx].id,
+      };
+    } else {
+      nextSnapshots = [...monthlySnapshots, todaySnap];
+    }
+    nextSnapshots.sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+    setMonthlySnapshots(nextSnapshots);
+    pushToLiveCloudIfConfigured({ monthlySnapshots: nextSnapshots }).catch(() => {});
+    showToast(
+      'Daily Performance Snapshot Logged',
+      `Saved ${todaySnap.snapshotDate} daily collection progress for all assigned officers.`,
+      'success',
     );
   };
 
@@ -1803,27 +1852,27 @@ export default function App() {
   }[] = [
     {
       id: 'overview',
-      label: 'Strategy Dashboard',
-      shortLabel: 'Dashboard',
-      icon: <LayoutDashboard className="w-4 h-4 shrink-0" />,
+      label: t('breadcrumbOverview'),
+      shortLabel: t('navOverview'),
+      icon: <Landmark className="w-4 h-4 shrink-0" />,
     },
     {
       id: 'assign_user',
-      label: 'Assign User Follow-Up & Performance',
-      shortLabel: 'Assign User',
-      icon: <ClipboardCheck className="w-4 h-4 shrink-0" />,
+      label: t('breadcrumbAssignUser'),
+      shortLabel: t('navAssignUser'),
+      icon: <Briefcase className="w-4 h-4 shrink-0" />,
       badge: staffAssignments.length > 0 ? staffAssignments.length : undefined,
     },
     {
       id: 'below_one',
-      label: 'Below 1 · 90 Ratio Plan',
-      shortLabel: 'Below 1 (90R)',
-      icon: <Target className="w-4 h-4 shrink-0" />,
+      label: t('breadcrumbBelowOne'),
+      shortLabel: t('navBelowOne'),
+      icon: <Scale className="w-4 h-4 shrink-0" />,
     },
     {
       id: 'borderline',
-      label: 'Next Month Borderline',
-      shortLabel: 'Next Borderline',
+      label: t('breadcrumbBorderline'),
+      shortLabel: t('navBorderline'),
       icon: <ShieldAlert className="w-4 h-4 shrink-0" />,
       badge:
         strategySummary.borderlineCount > 0
@@ -1832,10 +1881,29 @@ export default function App() {
     },
     {
       id: 'worst',
-      label: 'Worst Case (W) Radar',
-      shortLabel: 'Worst (W)',
+      label: t('breadcrumbWorst'),
+      shortLabel: t('navWorst'),
       icon: <Flame className="w-4 h-4 shrink-0" />,
       badge: worstCount > 0 ? worstCount : undefined,
+    },
+    {
+      id: 'alerts',
+      label: t('breadcrumbAlerts'),
+      shortLabel: t('navAlerts'),
+      icon: <BellRing className="w-4 h-4 shrink-0" />,
+      badge: urgentAlertsCount > 0 ? urgentAlertsCount : undefined,
+    },
+    {
+      id: 'rewards',
+      label: t('breadcrumbRewards'),
+      shortLabel: t('navRewards'),
+      icon: <Trophy className="w-4 h-4 shrink-0" />,
+    },
+    {
+      id: 'fb_incentive',
+      label: t('breadcrumbFbIncentive'),
+      shortLabel: t('navFbIncentive'),
+      icon: <BadgeDollarSign className="w-4 h-4 shrink-0" />,
     },
   ];
 
@@ -1848,16 +1916,15 @@ export default function App() {
   }[] = [
     {
       id: 'tools',
-      label: 'Office Breakdown, BM Analytics & Alerts',
-      shortLabel: 'Tools Menu',
-      icon: <Layers className="w-4 h-4 shrink-0" />,
-      badge: urgentAlertsCount > 0 ? urgentAlertsCount : undefined,
+      label: t('breadcrumbTools'),
+      shortLabel: t('navTools'),
+      icon: <PieChart className="w-4 h-4 shrink-0" />,
     },
     {
       id: 'settings',
-      label: 'Settings & Master Lookup',
-      shortLabel: 'Settings',
-      icon: <Settings className="w-4 h-4 shrink-0" />,
+      label: t('breadcrumbSettings'),
+      shortLabel: t('navSettings'),
+      icon: <SlidersHorizontal className="w-4 h-4 shrink-0" />,
     },
   ];
 
@@ -1865,66 +1932,102 @@ export default function App() {
   const month30thLabel = getMonth30thLabel();
 
   const breadcrumbLabel: Record<NavSection, string> = {
-    overview: 'Strategy Dashboard, Officer Hub & Trends',
-    assign_user: 'Assign User Follow-Up & Performance Dashboard',
-    below_one: 'Below 1 (≤ 1.00) · 90 Ratio Action Plan',
-    borderline: 'Next-Month Borderline Control',
-    worst: 'Worst Case (W) Radar',
-    tools: 'Office Breakdown, BM Portfolio Analytics & Alerts',
-    settings: 'Settings · NPL Master Lookup & Admin Reset',
+    overview: t('breadcrumbOverview'),
+    assign_user: t('breadcrumbAssignUser'),
+    below_one: t('breadcrumbBelowOne'),
+    borderline: t('breadcrumbBorderline'),
+    worst: t('breadcrumbWorst'),
+    alerts: t('breadcrumbAlerts'),
+    rewards: t('breadcrumbRewards'),
+    fb_incentive: t('breadcrumbFbIncentive'),
+    tools: t('breadcrumbTools'),
+    settings: t('breadcrumbSettings'),
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
-      {/* Sticky Header */}
-      <header className="sticky top-0 z-30 h-16 bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border-b border-slate-200/80 dark:border-slate-800/80 px-4 sm:px-6 flex items-center justify-between gap-4 shrink-0 shadow-xs">
-        <div className="flex items-center gap-3.5 min-w-0">
-          <div className="relative flex items-center justify-center p-2 rounded-2xl bg-gradient-to-br from-emerald-500 via-teal-600 to-slate-900 shadow-md shadow-emerald-950/20 border border-emerald-400/30 shrink-0">
-            <PulseLogoMark className="w-6 h-6 text-white drop-shadow" />
+    <div className="min-h-screen flex flex-col bg-[#f7f6f4] dark:bg-[#0f1115] text-zinc-900 dark:text-zinc-100">
+      {/* Sticky Commercial Credit Corporate Header */}
+      <header className="sticky top-0 z-30 h-16 bg-white/92 dark:bg-[#16181e]/92 backdrop-blur-xl border-b border-zinc-200/90 dark:border-zinc-800/90 px-4 sm:px-6 flex items-center justify-between gap-3 shrink-0 shadow-xs">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="relative flex items-center justify-center px-2 py-1.5 rounded-xl bg-white shadow-xs border border-zinc-200/90 dark:border-zinc-700 shrink-0">
+            <img
+              src="/assets/aistudio/og-cc_8ac5cf6e.png"
+              alt="Commercial Credit Logo"
+              className="h-7 sm:h-8 w-auto object-contain"
+            />
           </div>
 
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="font-display text-base sm:text-lg font-extrabold tracking-tight text-slate-900 dark:text-white whitespace-nowrap">
+              <span className="font-display text-sm sm:text-base font-extrabold tracking-tight text-zinc-900 dark:text-white whitespace-nowrap">
                 WG PULSE
               </span>
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 shadow-xs">
-                COMMAND
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-red-50 text-red-800 dark:bg-red-950/70 dark:text-red-300 border border-red-200 dark:border-red-800/80">
+                RECOVERY
               </span>
-              <span aria-hidden="true" className="text-slate-300 dark:text-slate-700 hidden lg:inline">·</span>
-              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 truncate hidden lg:inline">
+              <span aria-hidden="true" className="text-zinc-300 dark:text-zinc-700 hidden xl:inline">·</span>
+              <span className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 truncate hidden xl:inline">
                 {breadcrumbLabel[activeNav]}
               </span>
             </div>
-            <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 tracking-wide uppercase truncate block">
-              Leasing &amp; Finance Recovery Control · {isAdmin ? 'Admin Mode' : 'Live View-Only'}
+            <span className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 tracking-wide truncate block">
+              {t('brandSubtitle')} · {isAdmin ? t('adminMode') : t('viewOnlyMode')}
             </span>
           </div>
         </div>
 
-        {/* Right Zone (Top Main Menu removed — single Bottom Floating Main Menu remains) */}
-        <div className="flex items-center gap-2 shrink-0" data-snapshot-ignore="true">
+        {/* Right Zone (Single Bottom Floating Main Menu — Header holds Utility & Language Controls) */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0" data-snapshot-ignore="true">
+          {/* Trilingual Switcher: English · සිංහල · தமிழ் */}
+          <div
+            role="group"
+            aria-label="Language selector"
+            className="inline-flex items-center p-0.5 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-100/80 dark:bg-zinc-900"
+          >
+            <Globe className="w-3.5 h-3.5 text-zinc-400 ml-1.5 mr-1 hidden xl:block" />
+            {(
+              [
+                { code: 'en', label: 'EN' },
+                { code: 'si', label: 'සිං' },
+                { code: 'ta', label: 'தமி' },
+              ] as { code: AppLanguage; label: string }[]
+            ).map((opt) => (
+              <button
+                key={opt.code}
+                type="button"
+                onClick={() => setLang(opt.code)}
+                className={`px-2 py-1 text-[11px] font-bold rounded-lg transition-colors ${
+                  lang === opt.code
+                    ? 'bg-red-700 text-white shadow-xs'
+                    : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
           <button
             type="button"
             onClick={() =>
               setSnapshotMode((prev) => (prev === 'pick' ? 'off' : 'pick'))
             }
-            title="Select any section, card, or chart to Copy PNG / Download PNG / PDF / Excel (Ctrl+Shift+S)"
-            className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
+            title="Select any section, card, or chart to Copy PNG / Download PNG / PDF / Excel / Share WhatsApp (Ctrl+Shift+S)"
+            className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
               snapshotMode === 'pick'
-                ? 'border-emerald-500 bg-emerald-600 text-white'
-                : 'border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
+                ? 'border-red-600 bg-red-700 text-white'
+                : 'border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800'
             }`}
           >
             <Camera
               className={`w-3.5 h-3.5 shrink-0 ${
                 snapshotMode === 'pick'
                   ? 'text-white'
-                  : 'text-emerald-600 dark:text-emerald-400'
+                  : 'text-red-700 dark:text-red-400'
               }`}
             />
             <span className="hidden md:inline">
-              {snapshotMode === 'pick' ? 'Picking Section…' : 'Snap / Export'}
+              {snapshotMode === 'pick' ? t('pickingSection') : t('snapExport')}
             </span>
           </button>
 
@@ -1933,21 +2036,21 @@ export default function App() {
             onClick={() =>
               setSnapshotMode((prev) => (prev === 'crop' ? 'off' : 'crop'))
             }
-            title="Drag a custom box anywhere on screen to copy or save a snapshot"
+            title="Drag a custom box anywhere on screen to copy, save, or WhatsApp share a snapshot"
             className={`inline-flex items-center gap-1.5 px-2.5 py-2 text-xs font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
               snapshotMode === 'crop'
-                ? 'border-blue-500 bg-blue-600 text-white'
-                : 'border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
+                ? 'border-zinc-800 bg-zinc-900 text-white'
+                : 'border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800'
             }`}
           >
             <Crop
               className={`w-3.5 h-3.5 shrink-0 ${
                 snapshotMode === 'crop'
                   ? 'text-white'
-                  : 'text-blue-600 dark:text-blue-400'
+                  : 'text-zinc-700 dark:text-zinc-300'
               }`}
             />
-            <span className="hidden lg:inline">Area Snap</span>
+            <span className="hidden xl:inline">{t('areaSnap')}</span>
           </button>
 
           <PWAInstallButton />
@@ -1957,16 +2060,16 @@ export default function App() {
             onClick={() => syncFromLiveCloud(false)}
             disabled={isSyncingCloud}
             title="Fetch latest Admin-published data"
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 shadow-xs disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-medium rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 shadow-xs disabled:opacity-50"
           >
             <Cloud className={`w-3.5 h-3.5 text-emerald-600 ${isSyncingCloud ? 'animate-pulse' : ''}`} />
-            <span className="hidden lg:inline">{isSyncingCloud ? 'Syncing...' : 'Refresh Live'}</span>
+            <span className="hidden xl:inline">{isSyncingCloud ? t('syncing') : t('refreshLive')}</span>
           </button>
 
           {isAdmin && (
-            <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer transition-colors whitespace-nowrap shrink-0 shadow-xs">
-              <Upload className="w-3.5 h-3.5 text-blue-600" />
-              <span className="hidden md:inline">Upload AERS</span>
+            <label className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-medium rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer transition-colors whitespace-nowrap shrink-0 shadow-xs">
+              <Upload className="w-3.5 h-3.5 text-red-700 dark:text-red-400" />
+              <span className="hidden md:inline">{t('uploadAers')}</span>
               <span className="md:hidden">AERS</span>
               <input
                 type="file"
@@ -1985,21 +2088,21 @@ export default function App() {
             type="button"
             onClick={() => setAdminModalOpen(true)}
             aria-label="Admin login and reset controls"
-            className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
+            className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-medium rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
               isAdmin
                 ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
-                : 'border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
+                : 'border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800'
             }`}
           >
             {isAdmin ? (
               <>
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="hidden sm:inline">Admin Active</span>
+                <span className="hidden sm:inline">{t('adminActive')}</span>
               </>
             ) : (
               <>
-                <Lock className="w-3.5 h-3.5 text-slate-500" />
-                <span className="hidden sm:inline">Admin Login</span>
+                <Lock className="w-3.5 h-3.5 text-zinc-500" />
+                <span className="hidden sm:inline">{t('adminLogin')}</span>
               </>
             )}
           </button>
@@ -2008,36 +2111,36 @@ export default function App() {
             type="button"
             onClick={() => setIsDark((prev) => !prev)}
             aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-            className="inline-flex items-center justify-center p-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shrink-0 shadow-xs"
+            className="inline-flex items-center justify-center p-2 text-xs font-medium rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors shrink-0 shadow-xs"
           >
             {isDark ? (
               <Sun className="w-4 h-4 text-amber-400" />
             ) : (
-              <Moon className="w-4 h-4 text-slate-600" />
+              <Moon className="w-4 h-4 text-zinc-600" />
             )}
           </button>
         </div>
       </header>
 
       {/* Sub-Header Live Strategy Strip */}
-      <div className="bg-white/60 dark:bg-slate-900/40 border-b border-slate-200/80 dark:border-slate-800/80 px-4 sm:px-6 py-2.5">
+      <div className="bg-white/75 dark:bg-zinc-900/50 border-b border-zinc-200/80 dark:border-zinc-800/80 px-4 sm:px-6 py-2.5">
         <div className="max-w-[1600px] mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-600 dark:text-slate-400 tabular-nums">
-            <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-400">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-zinc-600 dark:text-zinc-400 tabular-nums">
+            <span className="inline-flex items-center gap-1.5 font-semibold text-red-700 dark:text-red-400">
               <RefreshCw className="w-3 h-3 shrink-0" />
-              {isAdmin ? 'Admin Live Publish Enabled' : 'Live View Mode (Admin Controlled)'}
+              {isAdmin ? t('adminMode') : t('viewOnlyMode')}
             </span>
             <span aria-hidden="true">·</span>
             <span>
               Snapshot:{' '}
-              <span className="font-mono text-slate-900 dark:text-slate-200">
+              <span className="font-mono text-zinc-900 dark:text-zinc-200">
                 {aersMeta?.printedDateTime || '—'}
               </span>
             </span>
             <span aria-hidden="true">·</span>
             <span>
               Scope:{' '}
-              <span className="font-mono font-semibold text-emerald-700 dark:text-emerald-400">
+              <span className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">
                 {selectedOfficer === 'ALL' ? 'All Officers (Branch)' : selectedOfficer}
               </span>
             </span>
@@ -2058,7 +2161,7 @@ export default function App() {
             <span aria-hidden="true">·</span>
             <span>
               AERS Indexed:{' '}
-              <span className="font-mono text-slate-900 dark:text-slate-200">
+              <span className="font-mono text-zinc-900 dark:text-zinc-200">
                 {visibleAersRecords.length.toLocaleString()}
               </span>
             </span>
@@ -2068,45 +2171,45 @@ export default function App() {
             <button
               type="button"
               onClick={() => setHoverSnapEnabled((prev) => !prev)}
-              title="Toggle instant Copy / PNG / PDF / Excel quick bar when hovering over any card or section"
+              title="Toggle instant Copy / PNG / PDF / Excel / WhatsApp quick bar when hovering over any card or section"
               className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
                 hoverSnapEnabled
-                  ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300'
-                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400'
+                  ? 'border-red-200 dark:border-red-900/70 bg-red-50/70 dark:bg-red-950/35 text-red-800 dark:text-red-300'
+                  : 'border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400'
               }`}
             >
               <Camera className="w-3.5 h-3.5" />
-              Hover Snap: {hoverSnapEnabled ? 'ON' : 'OFF'}
+              {t('hoverSnap')}: {hoverSnapEnabled ? 'ON' : 'OFF'}
             </button>
             <button
               type="button"
               onClick={handleTestPopup}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0"
             >
-              <BellRing className="w-3.5 h-3.5" />
-              Test Pop-up
+              <BellRing className="w-3.5 h-3.5 text-red-700 dark:text-red-400" />
+              {t('testPopup')}
             </button>
           </div>
         </div>
       </div>
 
-      {/* Live Scrolling Recovery Ticker */}
-      <div className="bg-emerald-950/90 text-emerald-100 border-b border-emerald-900 overflow-hidden py-2 text-xs font-mono relative">
-        <div className="absolute left-0 top-0 bottom-0 z-10 w-12 bg-gradient-to-r from-emerald-950 to-transparent pointer-events-none" />
-        <div className="absolute right-0 top-0 bottom-0 z-10 w-12 bg-gradient-to-l from-emerald-950 to-transparent pointer-events-none" />
+      {/* Live Scrolling Recovery Ticker (Commercial Credit Charcoal + Crimson) */}
+      <div className="bg-zinc-900 text-zinc-100 border-b border-red-900/60 overflow-hidden py-2 text-xs font-mono relative">
+        <div className="absolute left-0 top-0 bottom-0 z-10 w-12 bg-gradient-to-r from-zinc-900 to-transparent pointer-events-none" />
+        <div className="absolute right-0 top-0 bottom-0 z-10 w-12 bg-gradient-to-l from-zinc-900 to-transparent pointer-events-none" />
         <div className="animate-marquee flex items-center gap-8 whitespace-nowrap">
-          <span className="inline-flex items-center gap-1.5 font-bold text-emerald-300">
+          <span className="inline-flex items-center gap-1.5 font-bold text-red-400">
             <Bell className="w-3.5 h-3.5" />
-            LIVE AERS ALERTS:
+            {t('liveAlertsPrefix')}
           </span>
           <span>· 91-DPD Danger Zone: {aersAlertSummary.dpd91Danger} pre-NPL accounts</span>
           <span>· 0-Effort Borderline: {aersAlertSummary.zeroEffortBorderline} uncontacted files</span>
           <span>· Newly Slipped NPL: {aersAlertSummary.newlySlippedNpl} accounts</span>
           <span>· WORST (W) Priority: {aersAlertSummary.worst} files</span>
           <span>· Below 1 (90 Ratio): {aersAlertSummary.ratio90Pct.toFixed(1)}% (Target 90.0%)</span>
-          <span className="inline-flex items-center gap-1.5 font-bold text-emerald-300 ml-8">
+          <span className="inline-flex items-center gap-1.5 font-bold text-red-400 ml-8">
             <Bell className="w-3.5 h-3.5" />
-            LIVE AERS ALERTS:
+            {t('liveAlertsPrefix')}
           </span>
           <span>· 91-DPD Danger Zone: {aersAlertSummary.dpd91Danger} pre-NPL accounts</span>
           <span>· 0-Effort Borderline: {aersAlertSummary.zeroEffortBorderline} uncontacted files</span>
@@ -2126,7 +2229,7 @@ export default function App() {
                 ? 'bg-red-50 dark:bg-red-950/60 border-red-200 dark:border-red-800 text-red-800 dark:text-red-200'
                 : toast.tone === 'success'
                   ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
-                  : 'bg-blue-50 dark:bg-blue-950/60 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200'
+                  : 'bg-zinc-100 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200'
             }`}
           >
             <div className="flex items-start gap-2.5">
@@ -2161,30 +2264,37 @@ export default function App() {
             <>
               <section
                 aria-label="Recovery Strategy Summary"
-                className="bg-gradient-to-br from-emerald-950 via-slate-900 to-slate-950 text-white border border-emerald-800/40 rounded-3xl p-6 sm:p-7 shadow-xl shadow-slate-950/25 relative overflow-hidden backdrop-blur-xl"
+                className="bg-gradient-to-br from-zinc-900 via-[#1d1719] to-red-950 text-white border border-red-900/40 rounded-3xl p-6 sm:p-7 shadow-xl shadow-zinc-950/20 relative overflow-hidden"
               >
-                <div className="absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-600 opacity-75" />
+                <div className="absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r from-red-700 via-red-500 to-zinc-800 opacity-90" />
 
                 <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 relative z-10">
                   <div className="space-y-3.5 max-w-2xl">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">
-                        WG Pulse Executive Command · Campaign Nov 2026 – Mar 2027
+                    <div className="flex items-center gap-2.5">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-white/95">
+                        <img
+                          src="/assets/aistudio/og-cc_8ac5cf6e.png"
+                          alt="Commercial Credit"
+                          className="h-4 w-auto object-contain"
+                        />
+                      </span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-red-300">
+                        {t('heroEyebrow')}
                       </span>
                     </div>
 
                     <h1 className="font-display text-xl sm:text-2xl lg:text-3xl font-extrabold tracking-tight text-white leading-tight">
-                      Current NPL &amp; Borderline Recovery Control
+                      {t('heroTitle')}
                     </h1>
 
-                    <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-xl">
-                      Strict NPL &amp; Borderline isolation separating 91+ DPD Classified, Opening NPL, and Critical 76–90 DPD Borderline accounts while excluding regular performing contracts.
+                    <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed max-w-xl">
+                      {t('heroDesc')}
                     </p>
 
                     <div className="grid grid-cols-3 gap-3 pt-1 tabular-nums max-w-xl">
                       <div className="p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md">
-                        <div className="text-[11px] font-medium text-slate-400">
-                          Office Types
+                        <div className="text-[11px] font-medium text-zinc-400">
+                          {t('officeTypes')}
                         </div>
                         <div className="mt-1 text-lg sm:text-xl font-bold font-mono text-white">
                           {strategySummary.officeTypesCount}
@@ -2197,7 +2307,7 @@ export default function App() {
                         className="text-left p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 hover:border-amber-400/60 backdrop-blur-md transition-all group"
                       >
                         <div className="text-[11px] font-medium text-amber-300 flex items-center justify-between">
-                          <span>Next-Mo Borderline</span>
+                          <span>{t('nextMoBorderline')}</span>
                           <span className="text-[9px] text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
                         </div>
                         <div className="mt-1 text-lg sm:text-xl font-bold font-mono text-amber-200">
@@ -2211,13 +2321,13 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setActiveNav('worst')}
-                        className="text-left p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 hover:border-rose-400/60 backdrop-blur-md transition-all group"
+                        className="text-left p-3 rounded-2xl bg-red-500/15 border border-red-500/35 hover:border-red-400/70 backdrop-blur-md transition-all group"
                       >
-                        <div className="text-[11px] font-medium text-rose-300 flex items-center justify-between">
-                          <span>WORST (W)</span>
-                          <span className="text-[9px] text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+                        <div className="text-[11px] font-medium text-red-300 flex items-center justify-between">
+                          <span>{t('worstCase')}</span>
+                          <span className="text-[9px] text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
                         </div>
-                        <div className="mt-1 text-lg sm:text-xl font-bold font-mono text-rose-200">
+                        <div className="mt-1 text-lg sm:text-xl font-bold font-mono text-red-200">
                           {strategySummary.worstCount}
                         </div>
                       </button>
@@ -2225,9 +2335,9 @@ export default function App() {
 
                     <div className="flex flex-wrap items-center gap-2.5 pt-2">
                       {isAdmin ? (
-                        <label className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-md cursor-pointer transition-all whitespace-nowrap">
+                        <label className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-red-600 text-white hover:bg-red-500 shadow-md cursor-pointer transition-all whitespace-nowrap">
                           <Upload className="w-3.5 h-3.5 stroke-[2.5]" />
-                          Upload Daily AERS
+                          {t('uploadDailyAers')}
                           <input
                             type="file"
                             accept=".xlsx,.xls,.csv"
@@ -2243,29 +2353,20 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => setAdminModalOpen(true)}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-emerald-300 transition-all whitespace-nowrap"
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-red-200 transition-all whitespace-nowrap"
                         >
                           <Lock className="w-3.5 h-3.5" />
-                          Admin Login to Upload Data
+                          {t('adminLoginToUpload')}
                         </button>
                       )}
 
                       <button
                         type="button"
-                        onClick={() => setActiveNav('borderline')}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/30 text-amber-200 transition-all whitespace-nowrap"
-                      >
-                        <ShieldAlert className="w-3.5 h-3.5" />
-                        Next Month Borderline
-                      </button>
-
-                      <button
-                        type="button"
                         onClick={() => setActiveNav('assign_user')}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-blue-500/20 hover:bg-blue-500/30 border border-blue-400/30 text-blue-200 transition-all whitespace-nowrap"
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white transition-all whitespace-nowrap"
                       >
-                        <ClipboardCheck className="w-3.5 h-3.5 text-blue-300" />
-                        Assign User
+                        <Briefcase className="w-3.5 h-3.5 text-red-300" />
+                        {t('navAssignUser')}
                       </button>
 
                       <button
@@ -2273,17 +2374,26 @@ export default function App() {
                         onClick={() => setActiveNav('below_one')}
                         className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-emerald-200 transition-all whitespace-nowrap"
                       >
-                        <Target className="w-3.5 h-3.5 text-emerald-400" />
-                        Below 1 · 90 Ratio Plan
+                        <Scale className="w-3.5 h-3.5 text-emerald-400" />
+                        {t('belowOnePlan')}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveNav('rewards')}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/30 text-amber-200 transition-all whitespace-nowrap"
+                      >
+                        <Trophy className="w-3.5 h-3.5 text-amber-300" />
+                        {t('navRewards')}
                       </button>
                     </div>
                   </div>
 
                   <div className="flex items-center justify-center shrink-0">
-                    <div className="w-full sm:w-72 h-44 rounded-2xl overflow-hidden border border-emerald-500/20 shadow-lg bg-slate-950">
+                    <div className="w-full sm:w-72 h-44 rounded-2xl overflow-hidden border border-red-500/25 shadow-lg bg-zinc-950">
                       <img
                         src={strategyHeroImg}
-                        alt="WG Pulse Leasing & Finance Recovery Strategy Illustration"
+                        alt="Commercial Credit Leasing & Finance Recovery Strategy Illustration"
                         referrerPolicy="no-referrer"
                         className="w-full h-full object-cover"
                       />
@@ -2363,10 +2473,13 @@ export default function App() {
                 aersRecords={aersRecords}
                 mrpMap={mrpMap}
                 assignments={staffAssignments}
+                monthlySnapshots={monthlySnapshots}
                 isDark={isDark}
+                isAdmin={isAdmin}
                 onAssignBulk={handleAssignStaffBulk}
                 onRemoveAssignment={handleRemoveStaffAssignment}
                 onClearStaffMonth={handleClearStaffMonth}
+                onLogTodaySnapshot={handleLogTodayStaffSnapshot}
               />
             </SectionSafeBoundary>
           )}
@@ -2399,13 +2512,46 @@ export default function App() {
             </SectionSafeBoundary>
           )}
 
+          {activeNav === 'alerts' && (
+            <SectionSafeBoundary name="Alerts & Pop-ups" resetKey={animKey}>
+              <AlertsNotificationsPanel
+                aersRecords={visibleAersRecords}
+                mrpMap={mrpMap}
+                prefs={notifPrefs}
+                permissionState={permissionState}
+                onUpdatePrefs={setNotifPrefs}
+                onRequestPermission={handleRequestNotifPermission}
+                onTestPopup={handleTestPopup}
+              />
+            </SectionSafeBoundary>
+          )}
+
+          {activeNav === 'rewards' && (
+            <SectionSafeBoundary name="XP & Rewards Hub" resetKey={animKey}>
+              <XpRewardsHubPanel
+                aersRecords={aersRecords}
+                aersMeta={aersMeta}
+                staffAssignments={staffAssignments}
+              />
+            </SectionSafeBoundary>
+          )}
+
+          {activeNav === 'fb_incentive' && (
+            <SectionSafeBoundary name="FB Incentive Hub" resetKey={animKey}>
+              <FbIncentivePanel
+                aersRecords={visibleAersRecords}
+                aersMeta={aersMeta}
+              />
+            </SectionSafeBoundary>
+          )}
+
           {activeNav === 'tools' && (
             <div className="space-y-6">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div
                   role="tablist"
-                  aria-label="Recovery Tools Menu"
-                  className="inline-flex flex-wrap items-center gap-1 p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs"
+                  aria-label="Recovery Analytics Menu"
+                  className="inline-flex flex-wrap items-center gap-1 p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xs"
                 >
                   <button
                     type="button"
@@ -2414,8 +2560,8 @@ export default function App() {
                     onClick={() => setToolsSubTab('office_breakdown')}
                     className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
                       toolsSubTab === 'office_breakdown'
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        ? 'bg-red-700 text-white'
+                        : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800'
                     }`}
                   >
                     <Building2 className="w-3.5 h-3.5" />
@@ -2428,41 +2574,16 @@ export default function App() {
                     onClick={() => setToolsSubTab('bm_analytics')}
                     className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
                       toolsSubTab === 'bm_analytics'
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        ? 'bg-red-700 text-white'
+                        : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800'
                     }`}
                   >
                     <BarChart3 className="w-3.5 h-3.5" />
                     BM &amp; Portfolio Analytics
                   </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={toolsSubTab === 'alerts'}
-                    onClick={() => setToolsSubTab('alerts')}
-                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
-                      toolsSubTab === 'alerts'
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    <Bell className="w-3.5 h-3.5" />
-                    Alerts &amp; Pop-ups
-                    {urgentAlertsCount > 0 && (
-                      <span
-                        className={`ml-1 px-1.5 py-0.5 text-[10px] font-mono rounded-md ${
-                          toolsSubTab === 'alerts'
-                            ? 'bg-white/20 text-white'
-                            : 'bg-red-500/15 text-red-700 dark:text-red-300'
-                        }`}
-                      >
-                        {urgentAlertsCount}
-                      </span>
-                    )}
-                  </button>
                 </div>
 
-                <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                <span className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
                   {monthlySnapshots.length} daily/monthly snapshots saved
                 </span>
               </div>
@@ -2487,20 +2608,6 @@ export default function App() {
                   />
                 </SectionSafeBoundary>
               )}
-
-              {toolsSubTab === 'alerts' && (
-                <SectionSafeBoundary name="Alerts & Notifications" resetKey={animKey}>
-                  <AlertsNotificationsPanel
-                    aersRecords={visibleAersRecords}
-                    mrpMap={mrpMap}
-                    prefs={notifPrefs}
-                    permissionState={permissionState}
-                    onUpdatePrefs={setNotifPrefs}
-                    onRequestPermission={handleRequestNotifPermission}
-                    onTestPopup={handleTestPopup}
-                  />
-                </SectionSafeBoundary>
-              )}
             </div>
           )}
 
@@ -2510,7 +2617,7 @@ export default function App() {
                 <div
                   role="tablist"
                   aria-label="Settings Menu"
-                  className="inline-flex flex-wrap items-center gap-1 p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs"
+                  className="inline-flex flex-wrap items-center gap-1 p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xs"
                 >
                   <button
                     type="button"
@@ -2519,8 +2626,8 @@ export default function App() {
                     onClick={() => setSettingsSubTab('lookup')}
                     className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
                       settingsSubTab === 'lookup'
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        ? 'bg-red-700 text-white'
+                        : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800'
                     }`}
                   >
                     <Database className="w-3.5 h-3.5" />
@@ -2533,8 +2640,8 @@ export default function App() {
                     onClick={() => setSettingsSubTab('backup')}
                     className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
                       settingsSubTab === 'backup'
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        ? 'bg-red-700 text-white'
+                        : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800'
                     }`}
                   >
                     <HardDriveDownload className="w-3.5 h-3.5" />
@@ -2571,30 +2678,36 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="mt-8 pb-28 px-4 sm:px-6 border-t border-slate-200/80 dark:border-slate-800/80 bg-white/60 dark:bg-slate-900/50 backdrop-blur-md">
+      <footer className="mt-8 pb-28 px-4 sm:px-6 border-t border-zinc-200/90 dark:border-zinc-800/90 bg-white/80 dark:bg-zinc-900/60 backdrop-blur-md">
         <div className="max-w-[1600px] mx-auto py-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 text-xs">
           <div className="flex items-center gap-3">
-            <PulseLogoMark className="w-7 h-7 shrink-0" />
+            <div className="px-2 py-1 rounded-lg bg-white border border-zinc-200 shadow-xs shrink-0">
+              <img
+                src="/assets/aistudio/og-cc_8ac5cf6e.png"
+                alt="Commercial Credit"
+                className="h-6 w-auto object-contain"
+              />
+            </div>
             <div>
-              <div className="font-semibold text-slate-900 dark:text-slate-100">
-                WG Pulse · Leasing &amp; Finance Recovery Control
+              <div className="font-semibold text-zinc-900 dark:text-zinc-100">
+                WG Pulse · {t('brandSubtitle')}
               </div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                Admin Live Cloud Sync · Office Type → MO/RO Strategy · Below 1 (90 Ratio) &amp; Officer Effort Analytics
+              <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                Admin Live Cloud Sync · Below 1 (90 Ratio) · XP Rewards · FB Incentive · Trilingual EN / සිංහල / தமிழ்
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-slate-600 dark:text-slate-400 tabular-nums">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-zinc-600 dark:text-zinc-400 tabular-nums">
             <span>
               Office Types:{' '}
-              <strong className="font-mono text-slate-900 dark:text-slate-200">
+              <strong className="font-mono text-zinc-900 dark:text-zinc-200">
                 {strategySummary.officeTypesCount}
               </strong>
             </span>
             <span>
               AERS Indexed:{' '}
-              <strong className="font-mono text-slate-900 dark:text-slate-200">
+              <strong className="font-mono text-zinc-900 dark:text-zinc-200">
                 {aersRecords.length.toLocaleString()}
               </strong>
             </span>
@@ -2606,7 +2719,7 @@ export default function App() {
             </span>
             <span>
               Assign Follow-Ups:{' '}
-              <strong className="font-mono text-slate-900 dark:text-slate-200">
+              <strong className="font-mono text-zinc-900 dark:text-zinc-200">
                 {staffAssignments.length}
               </strong>
             </span>
@@ -2619,7 +2732,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setAdminModalOpen(true)}
-              className="inline-flex items-center gap-1 font-medium text-blue-600 dark:text-blue-400 hover:underline"
+              className="inline-flex items-center gap-1 font-medium text-red-700 dark:text-red-400 hover:underline"
             >
               {isAdmin ? (
                 <>
@@ -2637,11 +2750,11 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Bottom Floating Glass Menu Dock */}
+      {/* Bottom Floating Glass Menu Dock (Commercial Credit Crimson + Obsidian) */}
       <nav
         aria-label="Primary Floating Glass Bottom Menu"
         data-snapshot-ignore="true"
-        className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 max-w-[95vw] overflow-x-auto bg-white/65 dark:bg-slate-900/65 backdrop-blur-2xl border border-white/60 dark:border-slate-700/60 shadow-[0_12px_40px_-10px_rgba(15,23,42,0.28)] rounded-2xl p-1.5"
+        className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 max-w-[96vw] overflow-x-auto bg-white/85 dark:bg-zinc-900/85 backdrop-blur-2xl border border-zinc-200/90 dark:border-zinc-700/80 shadow-[0_14px_40px_-10px_rgba(24,24,27,0.32)] rounded-2xl p-1.5"
       >
         <div className="flex items-center gap-1">
           {primaryNavItems.map((item) => {
@@ -2651,17 +2764,18 @@ export default function App() {
                 key={item.id}
                 type="button"
                 onClick={() => setActiveNav(item.id)}
-                className={`relative flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl transition-colors whitespace-nowrap shrink-0 ${
+                title={item.label}
+                className={`relative flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 ${
                   active
                     ? 'text-white'
-                    : 'text-slate-700 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-800/50'
+                    : 'text-zinc-700 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-100/80 dark:hover:bg-zinc-800/70'
                 }`}
               >
                 {active && (
                   <motion.div
                     layoutId="glassDockActive"
                     transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-                    className="absolute inset-0 bg-blue-600/95 dark:bg-blue-500/95 rounded-xl shadow-sm"
+                    className="absolute inset-0 bg-red-700 dark:bg-red-600 rounded-xl shadow-sm"
                   />
                 )}
                 <span className="relative z-10 flex items-center gap-1.5">
@@ -2672,7 +2786,7 @@ export default function App() {
                       className={`ml-0.5 font-mono text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded-md ${
                         active
                           ? 'bg-white/20 text-white'
-                          : 'bg-red-500/15 text-red-700 dark:text-red-300'
+                          : 'bg-red-600/15 text-red-700 dark:text-red-300'
                       }`}
                     >
                       {item.badge}
@@ -2685,7 +2799,7 @@ export default function App() {
 
           <div
             aria-hidden="true"
-            className="h-6 w-px bg-slate-300/70 dark:bg-slate-700/70 mx-1 shrink-0"
+            className="h-6 w-px bg-zinc-300/80 dark:bg-zinc-700/80 mx-1 shrink-0"
           />
 
           {secondaryNavItems.map((item) => {
@@ -2695,17 +2809,18 @@ export default function App() {
                 key={item.id}
                 type="button"
                 onClick={() => setActiveNav(item.id)}
-                className={`relative flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl transition-colors whitespace-nowrap shrink-0 ${
+                title={item.label}
+                className={`relative flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 ${
                   active
                     ? 'text-white'
-                    : 'text-slate-700 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-800/50'
+                    : 'text-zinc-700 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-100/80 dark:hover:bg-zinc-800/70'
                 }`}
               >
                 {active && (
                   <motion.div
                     layoutId="glassDockActive"
                     transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-                    className="absolute inset-0 bg-slate-900/90 dark:bg-blue-500/95 rounded-xl shadow-sm"
+                    className="absolute inset-0 bg-zinc-900 dark:bg-red-600 rounded-xl shadow-sm"
                   />
                 )}
                 <span className="relative z-10 flex items-center gap-1.5">
@@ -2716,7 +2831,7 @@ export default function App() {
                       className={`ml-0.5 font-mono text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded-md ${
                         active
                           ? 'bg-white/20 text-white'
-                          : 'bg-red-500/15 text-red-700 dark:text-red-300'
+                          : 'bg-red-600/15 text-red-700 dark:text-red-300'
                       }`}
                     >
                       {item.badge}

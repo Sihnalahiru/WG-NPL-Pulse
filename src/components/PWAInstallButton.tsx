@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import { useOnlineStatus, usePWAInstall } from '../hooks/usePWAInstall';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface PWAInstallButtonProps {
   compact?: boolean;
@@ -17,6 +18,7 @@ interface PWAInstallButtonProps {
 export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
   const { isInstallable, isInstalled, isIOS, isWindows, isInIframe, install } =
     usePWAInstall();
+  const { t } = useLanguage();
   const [showGuide, setShowGuide] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
 
@@ -52,14 +54,12 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
         data-snapshot-ignore="true"
         className={`inline-flex items-center gap-1.5 font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
           isInstallable
-            ? 'border-emerald-500 bg-emerald-600 text-white hover:bg-emerald-700'
-            : 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/90 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60'
+            ? 'border-red-700 bg-red-700 text-white hover:bg-red-800'
+            : 'border-red-200 dark:border-red-900/70 bg-red-50/90 dark:bg-red-950/40 text-red-800 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/50'
         } ${compact ? 'px-2.5 py-1.5 text-[11px]' : 'px-3 py-2 text-xs'}`}
       >
         <MonitorDown className="w-3.5 h-3.5 shrink-0" />
-        <span className="hidden sm:inline">
-          {isInstallable ? 'Install PC App' : 'Install App'}
-        </span>
+        <span className="hidden sm:inline">{t('installApp')}</span>
       </button>
 
       {showGuide && (
@@ -68,24 +68,28 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
           aria-modal="true"
           aria-label="Install WG Pulse on Windows PC or Mobile"
           data-snapshot-ignore="true"
-          className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
+          className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-zinc-950/65 backdrop-blur-xs"
           onClick={() => setShowGuide(false)}
         >
           <div
-            className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
+            className="w-full max-w-lg rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-2xl overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 bg-emerald-50/60 dark:bg-emerald-950/30">
+            <div className="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-3 bg-red-50/70 dark:bg-red-950/30">
               <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-emerald-600 text-white">
-                  <MonitorDown className="w-4 h-4" />
+                <div className="p-1.5 rounded-xl bg-white border border-red-200 shadow-xs">
+                  <img
+                    src="/assets/aistudio/og-cc_8ac5cf6e.png"
+                    alt="Commercial Credit"
+                    className="w-8 h-5 object-contain"
+                  />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                  <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
                     Install WG Pulse as a Windows PC App
                   </h3>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Standalone desktop window · Start Menu &amp; Taskbar shortcut · Offline cache
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                    Standalone desktop window · Commercial Credit App Icon · Offline cache
                   </p>
                 </div>
               </div>
@@ -93,7 +97,7 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
                 type="button"
                 onClick={() => setShowGuide(false)}
                 aria-label="Close install guide"
-                className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-200/70 dark:hover:bg-slate-800"
+                className="p-1.5 rounded-lg text-zinc-500 hover:bg-zinc-200/70 dark:hover:bg-zinc-800"
               >
                 <X className="w-4 h-4" />
               </button>

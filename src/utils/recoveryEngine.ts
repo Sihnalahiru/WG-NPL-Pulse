@@ -20,6 +20,8 @@ import type {
   OfficerEvaluationRow,
   OpeningOfficerBaseline,
   Sheet2WatchlistRow,
+  StaffAssignedContract,
+  StaffDailySnapshotEntry,
   TrackedContract,
   WhatsAppLocationMatch,
   WorstCaseAccountItem,
@@ -2830,9 +2832,105 @@ export function extractBelowOneQuickWins(
     );
 }
 
+export function computeStaffDailySnapshotMap(
+  aersRecords: AersRecord[],
+  staffAssignments: StaffAssignedContract[],
+  monthKey?: string,
+): Record<string, StaffDailySnapshotEntry> {
+  const result: Record<string, StaffDailySnapshotEntry> = {};
+  if (!Array.isArray(staffAssignments) || staffAssignments.length === 0) {
+    return result;
+  }
+
+  const targetMonth = monthKey || getTodayISO().slice(0, 7);
+  const scoped = staffAssignments.filter((a) => a && a.monthKey === targetMonth);
+  const activeList = scoped.length > 0 ? scoped : staffAssignments;
+
+  const aersByNo = new Map<string, AersRecord>();
+  for (const r of aersRecords) {
+    if (r?.contractNo) {
+      aersByNo.set(normalizeContractNo(r.contractNo), r);
+    }
+  }
+
+  const grouped = new Map<
+    string,
+    {
+      assignedCount: number;
+      paidCount: number;
+      totalDue: number;
+      totalCollection: number;
+      opAgeSum: number;
+      closingAgeSum: number;
+      reducingCount: number;
+      worseningCount: number;
+      assignEfforts: number;
+    }
+  >();
+
+  for (const assignment of activeList) {
+    const name = assignment.staffName;
+    if (!name) continue;
+    const rec = aersByNo.get(normalizeContractNo(assignment.contractNo));
+    const due = Number(rec?.currentMonthDue || rec?.dueBudgetMonth || assignment.assignedDue) || 0;
+    const coll = Number(rec?.totalCollection ?? 0) || 0;
+    const opAge = Number(rec?.opAge ?? assignment.assignedOpAge) || 0;
+    const closingAge = Number(rec?.currentAge ?? assignment.assignedOpAge) || 0;
+    const variance = closingAge - opAge;
+    const efforts = Number(rec?.assignOfficerEfforts ?? 0) || 0;
+
+    const bucket = grouped.get(name) ?? {
+      assignedCount: 0,
+      paidCount: 0,
+      totalDue: 0,
+      totalCollection: 0,
+      opAgeSum: 0,
+      closingAgeSum: 0,
+      reducingCount: 0,
+      worseningCount: 0,
+      assignEfforts: 0,
+    };
+
+    bucket.assignedCount += 1;
+    if (coll > 0) bucket.paidCount += 1;
+    bucket.totalDue += due;
+    bucket.totalCollection += coll;
+    bucket.opAgeSum += opAge;
+    bucket.closingAgeSum += closingAge;
+    if (variance <= -0.05) bucket.reducingCount += 1;
+    else if (variance >= 0.05) bucket.worseningCount += 1;
+    bucket.assignEfforts += efforts;
+
+    grouped.set(name, bucket);
+  }
+
+  for (const [staffName, s] of grouped.entries()) {
+    const collectionPct =
+      s.totalDue > 0 ? Math.min(200, Math.round((s.totalCollection / s.totalDue) * 1000) / 10) : 0;
+    result[staffName] = {
+      staffName,
+      assignedCount: s.assignedCount,
+      paidCount: s.paidCount,
+      pendingCount: Math.max(0, s.assignedCount - s.paidCount),
+      totalDue: Math.round(s.totalDue),
+      totalCollection: Math.round(s.totalCollection),
+      collectionPct,
+      avgOpAge: s.assignedCount > 0 ? Math.round((s.opAgeSum / s.assignedCount) * 100) / 100 : 0,
+      avgClosingAge:
+        s.assignedCount > 0 ? Math.round((s.closingAgeSum / s.assignedCount) * 100) / 100 : 0,
+      reducingCount: s.reducingCount,
+      worseningCount: s.worseningCount,
+      assignEfforts: s.assignEfforts,
+    };
+  }
+
+  return result;
+}
+
 export function buildDailyAersSnapshot(
   aersRecords: AersRecord[],
   aersMeta: AersMetadata,
+  staffAssignments?: StaffAssignedContract[],
 ): MonthlySnapshot {
   const todayISO = getTodayISO();
   const snapDate = todayISO;
@@ -2933,6 +3031,10 @@ export function buildDailyAersSnapshot(
     branchNpl: closingNpl,
     branchCollectionPct,
     sourceFile: aersMeta.fileName,
+    staffDailyStats:
+      staffAssignments && staffAssignments.length > 0
+        ? computeStaffDailySnapshotMap(aersRecords, staffAssignments, monthKey)
+        : undefined,
   };
 }
 

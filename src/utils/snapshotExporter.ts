@@ -15,10 +15,18 @@ export interface CropRect {
   height: number;
 }
 
+export interface WhatsAppShareResult {
+  mode: 'native_share' | 'whatsapp_ready';
+  format: 'png' | 'pdf' | 'xlsx';
+  fileName: string;
+  summaryText: string;
+  copiedImage?: boolean;
+}
+
 function sanitizeFileName(raw: string): string {
   const cleaned = raw
     .trim()
-    .replace(/[^a-zA-Z0-9\u0D80-\u0DFF\s_-]+/g, '')
+    .replace(/[^a-zA-Z0-9\u0D80-\u0DFF\u0B80-\u0BFF\s_-]+/g, '')
     .replace(/\s+/g, '_')
     .slice(0, 64);
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
@@ -51,7 +59,7 @@ export function inferElementLabel(el: HTMLElement): string {
     .trim()
     .replace(/\s+/g, ' ')
     .slice(0, 48);
-  return firstText || 'WG Pulse Section';
+  return firstText || 'Commercial Credit Section';
 }
 
 export function findSnapTargetElement(
@@ -83,7 +91,7 @@ export function findSnapTargetElement(
 
     const hasVisualFrame =
       /\bborder\b/.test(cls) ||
-      /\bbg-(white|slate|emerald|blue|amber|rose|red|gradient)/.test(cls) ||
+      /\bbg-(white|slate|zinc|stone|emerald|blue|amber|rose|red|gradient)/.test(cls) ||
       tag === 'section' ||
       tag === 'article' ||
       tag === 'table' ||
@@ -96,7 +104,6 @@ export function findSnapTargetElement(
       rect.height >= minHeight &&
       rect.width <= window.innerWidth * 0.99
     ) {
-      // Skip tiny icon buttons or single-line pill badges
       if (tag === 'button' && rect.height < 64 && rect.width < 180) {
         curr = curr.parentElement;
         continue;
@@ -115,8 +122,7 @@ export async function captureElementToPngDataUrl(
   options: SnapshotExportOptions = {},
 ): Promise<string> {
   const isDark =
-    options.isDark ??
-    document.documentElement.classList.contains('dark');
+    options.isDark ?? document.documentElement.classList.contains('dark');
   const computedBg = window.getComputedStyle(element).backgroundColor;
   const hasOpaqueBg =
     computedBg &&
@@ -125,7 +131,7 @@ export async function captureElementToPngDataUrl(
   const backgroundColor = hasOpaqueBg
     ? computedBg
     : isDark
-      ? '#0f172a'
+      ? '#14171f'
       : '#ffffff';
 
   const baseConfig = {
@@ -138,7 +144,6 @@ export async function captureElementToPngDataUrl(
   try {
     return await toPng(element, baseConfig);
   } catch {
-    // Fallback if cross-origin font stylesheet throws SecurityError
     return await toPng(element, {
       ...baseConfig,
       skipFonts: true,
@@ -151,10 +156,8 @@ export async function captureViewportCropToPng(
   options: SnapshotExportOptions = {},
 ): Promise<string> {
   const isDark =
-    options.isDark ??
-    document.documentElement.classList.contains('dark');
-  const rootEl =
-    document.getElementById('root') || document.body;
+    options.isDark ?? document.documentElement.classList.contains('dark');
+  const rootEl = document.getElementById('root') || document.body;
   const pixelRatio = options.pixelRatio ?? 2;
 
   const fullDataUrl = await captureElementToPngDataUrl(rootEl, {
@@ -186,7 +189,7 @@ export async function captureViewportCropToPng(
   if (!ctx) {
     throw new Error('Could not initialize snapshot canvas context.');
   }
-  ctx.fillStyle = isDark ? '#020617' : '#f8fafc';
+  ctx.fillStyle = isDark ? '#0f1115' : '#f7f6f4';
   ctx.fillRect(0, 0, srcW, srcH);
   ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
 
@@ -214,13 +217,26 @@ function dataUrlToBlob(dataUrl: string): Blob {
   return new Blob([bytes], { type: mime });
 }
 
-export function downloadPngDataUrl(dataUrl: string, label = 'WG_Pulse_Snapshot'): void {
+function downloadBlob(blob: Blob, fileName: string): void {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = dataUrl;
-  link.download = `${sanitizeFileName(label)}.png`;
+  link.href = url;
+  link.download = fileName;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+export function downloadPngDataUrl(dataUrl: string, label = 'WG_Pulse_Snapshot'): string {
+  const fileName = `${sanitizeFileName(label)}.png`;
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  return fileName;
 }
 
 export async function copyPngDataUrlToClipboard(
@@ -234,9 +250,7 @@ export async function copyPngDataUrlToClipboard(
     typeof ClipboardItem !== 'undefined'
   ) {
     try {
-      await navigator.clipboard.write([
-        new ClipboardItem({ 'image/png': blob }),
-      ]);
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
       return 'copied';
     } catch {
       // Fallback if iframe blocks clipboard image write
@@ -246,10 +260,10 @@ export async function copyPngDataUrlToClipboard(
   return 'downloaded';
 }
 
-export async function exportDataUrlToPdf(
+async function buildPdfDocumentFromDataUrl(
   dataUrl: string,
-  label = 'WG Pulse Snapshot',
-): Promise<void> {
+  label = 'Commercial Credit Snapshot',
+): Promise<{ pdf: jsPDF; fileName: string }> {
   const img = await loadImage(dataUrl);
   const imgW = img.naturalWidth;
   const imgH = img.naturalHeight;
@@ -265,30 +279,34 @@ export async function exportDataUrlToPdf(
   const pageW = pdf.internal.pageSize.getWidth();
   const pageH = pdf.internal.pageSize.getHeight();
   const margin = 10;
-  const headerH = 14;
+  const headerH = 15;
   const footerH = 7;
 
   const drawHeaderFooter = (pageNum: number, totalPages: number) => {
-    pdf.setFillColor(15, 23, 42);
+    // Commercial Credit deep charcoal header + crimson accent bar
+    pdf.setFillColor(24, 24, 27);
     pdf.rect(0, 0, pageW, headerH, 'F');
+    pdf.setFillColor(200, 30, 30);
+    pdf.rect(0, headerH - 1.2, pageW, 1.2, 'F');
+
     pdf.setTextColor(255, 255, 255);
     pdf.setFont('helvetica', 'bold');
     pdf.setFontSize(10);
-    pdf.text('WG PULSE — Recovery Control Snapshot', margin, 6.2);
+    pdf.text('COMMERCIAL CREDIT · WG PULSE RECOVERY CONTROL', margin, 6.2);
 
     pdf.setFont('helvetica', 'normal');
     pdf.setFontSize(8);
-    pdf.setTextColor(167, 243, 208);
-    pdf.text(label.slice(0, 80), margin, 11.2);
+    pdf.setTextColor(252, 165, 165);
+    pdf.text(label.slice(0, 84), margin, 11.4);
 
     const timestamp = new Date().toLocaleString();
-    pdf.setTextColor(203, 213, 225);
+    pdf.setTextColor(212, 212, 216);
     pdf.text(timestamp, pageW - margin, 6.2, { align: 'right' });
 
-    pdf.setTextColor(100, 116, 139);
+    pdf.setTextColor(113, 113, 122);
     pdf.setFontSize(7.5);
     pdf.text(
-      `Page ${pageNum} of ${totalPages} · Generated by WG Pulse`,
+      `Page ${pageNum} of ${totalPages} · Commercial Credit WG Pulse`,
       pageW - margin,
       pageH - 3.5,
       { align: 'right' },
@@ -303,18 +321,8 @@ export async function exportDataUrlToPdf(
 
   if (renderH <= availH) {
     drawHeaderFooter(1, 1);
-    pdf.addImage(
-      dataUrl,
-      'PNG',
-      margin,
-      headerH + 4,
-      renderW,
-      renderH,
-      undefined,
-      'FAST',
-    );
+    pdf.addImage(dataUrl, 'PNG', margin, headerH + 4, renderW, renderH, undefined, 'FAST');
   } else {
-    // Clean multi-page vertical slicing for tall dashboards/tables
     const slicePixelH = Math.floor((availH / renderH) * imgH);
     const totalPages = Math.max(1, Math.ceil(imgH / Math.max(1, slicePixelH)));
 
@@ -346,16 +354,25 @@ export async function exportDataUrlToPdf(
     }
   }
 
-  pdf.save(`${sanitizeFileName(label)}.pdf`);
+  return { pdf, fileName: `${sanitizeFileName(label)}.pdf` };
+}
+
+export async function exportDataUrlToPdf(
+  dataUrl: string,
+  label = 'Commercial Credit Snapshot',
+): Promise<string> {
+  const { pdf, fileName } = await buildPdfDocumentFromDataUrl(dataUrl, label);
+  pdf.save(fileName);
+  return fileName;
 }
 
 export async function exportElementToPdf(
   element: HTMLElement,
   options: SnapshotExportOptions = {},
-): Promise<void> {
+): Promise<string> {
   const label = options.label || inferElementLabel(element);
   const dataUrl = await captureElementToPngDataUrl(element, options);
-  await exportDataUrlToPdf(dataUrl, label);
+  return exportDataUrlToPdf(dataUrl, label);
 }
 
 function cleanCellText(node: HTMLElement): string {
@@ -378,10 +395,11 @@ function autoSizeSheet(ws: XLSX.WorkSheet, rows: (string | number)[][]): void {
 }
 
 function safeSheetName(raw: string, index: number, used: Set<string>): string {
-  const base = raw
-    .replace(/[\\/?*[\]:]/g, '')
-    .trim()
-    .slice(0, 26) || `Sheet_${index + 1}`;
+  const base =
+    raw
+      .replace(/[\\/?*[\]:]/g, '')
+      .trim()
+      .slice(0, 26) || `Sheet_${index + 1}`;
   let name = base;
   let suffix = 2;
   while (used.has(name.toLowerCase())) {
@@ -392,10 +410,10 @@ function safeSheetName(raw: string, index: number, used: Set<string>): string {
   return name;
 }
 
-export function exportElementToExcel(
+function buildWorkbookForElement(
   element: HTMLElement,
   label?: string,
-): { sheetCount: number; rowCount: number } {
+): { wb: XLSX.WorkBook; fileName: string; sheetCount: number; rowCount: number } {
   const sectionLabel = label || inferElementLabel(element);
   const wb = XLSX.utils.book_new();
   const usedNames = new Set<string>();
@@ -435,9 +453,9 @@ export function exportElementToExcel(
     });
   }
 
-  // Also extract non-table structured KPI cards / chart summaries / list items
   if (totalRows === 0) {
     const aoa: (string | number)[][] = [
+      ['Organization', 'Commercial Credit — WG Pulse'],
       ['Section', sectionLabel],
       ['Exported At', new Date().toLocaleString()],
       [],
@@ -451,7 +469,6 @@ export function exportElementToExcel(
     ).filter((el) => {
       const htmlEl = el as HTMLElement;
       if (htmlEl.closest('[data-snapshot-ignore="true"]')) return false;
-      // Avoid outer wrapper duplicating inner cards
       const hasInnerCards =
         htmlEl.querySelectorAll('[class*="rounded-xl"], [class*="rounded-2xl"]').length > 2;
       return !hasInnerCards;
@@ -479,21 +496,171 @@ export function exportElementToExcel(
       }
     });
 
-    if (aoa.length <= 4) {
+    if (aoa.length <= 5) {
       const fallbackText = cleanCellText(element);
       aoa.push([sectionLabel, fallbackText || 'No tabular data in selection']);
     }
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     autoSizeSheet(ws, aoa);
-    XLSX.utils.book_append_sheet(
-      wb,
-      ws,
-      safeSheetName(sectionLabel, 0, usedNames),
-    );
-    totalRows = Math.max(1, aoa.length - 4);
+    XLSX.utils.book_append_sheet(wb, ws, safeSheetName(sectionLabel, 0, usedNames));
+    totalRows = Math.max(1, aoa.length - 5);
   }
 
-  XLSX.writeFile(wb, `${sanitizeFileName(sectionLabel)}.xlsx`);
-  return { sheetCount: wb.SheetNames.length, rowCount: totalRows };
+  return {
+    wb,
+    fileName: `${sanitizeFileName(sectionLabel)}.xlsx`,
+    sheetCount: wb.SheetNames.length,
+    rowCount: totalRows,
+  };
+}
+
+export function exportElementToExcel(
+  element: HTMLElement,
+  label?: string,
+): { sheetCount: number; rowCount: number; fileName: string } {
+  const { wb, fileName, sheetCount, rowCount } = buildWorkbookForElement(element, label);
+  XLSX.writeFile(wb, fileName);
+  return { sheetCount, rowCount, fileName };
+}
+
+async function tryNativeFileShare(
+  file: File,
+  title: string,
+  text: string,
+): Promise<boolean> {
+  if (
+    typeof navigator !== 'undefined' &&
+    typeof navigator.share === 'function' &&
+    typeof navigator.canShare === 'function'
+  ) {
+    try {
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title, text });
+        return true;
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export async function prepareWhatsAppShareForElement(
+  element: HTMLElement,
+  format: 'png' | 'pdf' | 'xlsx',
+  options: SnapshotExportOptions = {},
+): Promise<WhatsAppShareResult> {
+  const label = options.label || inferElementLabel(element);
+  const stamp = new Date().toLocaleString();
+  const summaryText = `*Commercial Credit · WG Pulse Report*\nSection: ${label}\nFormat: ${format.toUpperCase()}\nGenerated: ${stamp}`;
+
+  if (format === 'png') {
+    const dataUrl = await captureElementToPngDataUrl(element, options);
+    const blob = dataUrlToBlob(dataUrl);
+    const fileName = `${sanitizeFileName(label)}.png`;
+    const file = new File([blob], fileName, { type: 'image/png' });
+
+    if (await tryNativeFileShare(file, label, summaryText)) {
+      return { mode: 'native_share', format, fileName, summaryText };
+    }
+
+    let copiedImage = false;
+    if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        copiedImage = true;
+      } catch {
+        copiedImage = false;
+      }
+    }
+    downloadBlob(blob, fileName);
+    return { mode: 'whatsapp_ready', format, fileName, summaryText, copiedImage };
+  }
+
+  if (format === 'pdf') {
+    const dataUrl = await captureElementToPngDataUrl(element, options);
+    const { pdf, fileName } = await buildPdfDocumentFromDataUrl(dataUrl, label);
+    const blob = pdf.output('blob');
+    const file = new File([blob], fileName, { type: 'application/pdf' });
+
+    if (await tryNativeFileShare(file, label, summaryText)) {
+      return { mode: 'native_share', format, fileName, summaryText };
+    }
+
+    downloadBlob(blob, fileName);
+    return { mode: 'whatsapp_ready', format, fileName, summaryText };
+  }
+
+  // Excel (.xlsx)
+  const { wb, fileName } = buildWorkbookForElement(element, label);
+  const arrayBuf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([arrayBuf], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const file = new File([blob], fileName, { type: blob.type });
+
+  if (await tryNativeFileShare(file, label, summaryText)) {
+    return { mode: 'native_share', format, fileName, summaryText };
+  }
+
+  downloadBlob(blob, fileName);
+  return { mode: 'whatsapp_ready', format, fileName, summaryText };
+}
+
+export async function prepareWhatsAppShareForCrop(
+  cropRect: CropRect,
+  format: 'png' | 'pdf',
+  options: SnapshotExportOptions = {},
+): Promise<WhatsAppShareResult> {
+  const label = 'WG_Pulse_Custom_Area';
+  const stamp = new Date().toLocaleString();
+  const summaryText = `*Commercial Credit · WG Pulse Area Snapshot*\nFormat: ${format.toUpperCase()}\nGenerated: ${stamp}`;
+  const dataUrl = await captureViewportCropToPng(cropRect, options);
+
+  if (format === 'png') {
+    const blob = dataUrlToBlob(dataUrl);
+    const fileName = `${sanitizeFileName(label)}.png`;
+    const file = new File([blob], fileName, { type: 'image/png' });
+
+    if (await tryNativeFileShare(file, label, summaryText)) {
+      return { mode: 'native_share', format, fileName, summaryText };
+    }
+
+    let copiedImage = false;
+    if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        copiedImage = true;
+      } catch {
+        copiedImage = false;
+      }
+    }
+    downloadBlob(blob, fileName);
+    return { mode: 'whatsapp_ready', format, fileName, summaryText, copiedImage };
+  }
+
+  const { pdf, fileName } = await buildPdfDocumentFromDataUrl(
+    dataUrl,
+    'Commercial Credit — Custom Area Snapshot',
+  );
+  const blob = pdf.output('blob');
+  const file = new File([blob], fileName, { type: 'application/pdf' });
+
+  if (await tryNativeFileShare(file, label, summaryText)) {
+    return { mode: 'native_share', format, fileName, summaryText };
+  }
+
+  downloadBlob(blob, fileName);
+  return { mode: 'whatsapp_ready', format, fileName, summaryText };
+}
+
+export function buildWhatsAppLink(text: string, rawPhone?: string): string {
+  const digits = (rawPhone || '').replace(/[^\d]/g, '');
+  const encoded = encodeURIComponent(text);
+  return digits.length >= 9
+    ? `https://wa.me/${digits}?text=${encoded}`
+    : `https://wa.me/?text=${encoded}`;
 }
