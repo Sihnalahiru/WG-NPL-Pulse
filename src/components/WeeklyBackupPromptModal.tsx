@@ -41,12 +41,15 @@ export function WeeklyBackupPromptModal({
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-zinc-950/65 backdrop-blur-xs"
+      className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-zinc-950/65 backdrop-blur-xs"
       role="dialog"
       aria-modal="true"
       aria-labelledby="weekly-backup-prompt-title"
     >
-      <div className="w-full max-w-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl overflow-hidden">
+      <div className="w-full max-w-md max-h-[92dvh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-t-3xl sm:rounded-2xl shadow-2xl pb-safe">
+        <div className="sm:hidden pt-2.5 flex justify-center bg-red-50/70 dark:bg-red-950/30">
+          <div className="w-10 h-1.5 rounded-full bg-zinc-300 dark:bg-zinc-700" />
+        </div>
         {/* Header */}
         <div className="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-red-50/70 dark:bg-red-950/30 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -71,7 +74,7 @@ export function WeeklyBackupPromptModal({
             type="button"
             onClick={onSnoozeTwoHours}
             aria-label="Snooze weekly backup prompt"
-            className="p-1.5 rounded-lg text-zinc-500 hover:bg-zinc-200/70 dark:hover:bg-zinc-800"
+            className="min-w-[38px] min-h-[38px] flex items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-200/70 dark:hover:bg-zinc-800"
           >
             <X className="w-4 h-4" />
           </button>
@@ -80,16 +83,16 @@ export function WeeklyBackupPromptModal({
         {/* Body */}
         <div className="p-5 space-y-4 text-xs">
           <p className="text-zinc-700 dark:text-zinc-300 leading-relaxed">
-            Your recurring weekly backup is due. Would you like to download and save a full WG Pulse JSON backup to your local computer now?
+            Your recurring weekly backup is due. Would you like to download and save a full WG Pulse JSON backup to your device now?
           </p>
 
           <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 space-y-2.5">
             <div className="flex items-center justify-between gap-2 text-[11px]">
-              <span className="inline-flex items-center gap-1.5 font-semibold text-zinc-800 dark:text-zinc-200">
-                <FileJson className="w-3.5 h-3.5 text-red-600" />
-                {fileNamePreview}
+              <span className="inline-flex items-center gap-1.5 font-semibold text-zinc-800 dark:text-zinc-200 min-w-0 truncate">
+                <FileJson className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                <span className="truncate">{fileNamePreview}</span>
               </span>
-              <span className="font-mono text-[10px] text-zinc-500">
+              <span className="font-mono text-[10px] text-zinc-500 shrink-0">
                 {activeSys.systemDate}
               </span>
             </div>
@@ -137,25 +140,25 @@ export function WeeklyBackupPromptModal({
             <button
               type="button"
               onClick={onConfirmDownload}
-              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold rounded-xl bg-red-700 hover:bg-red-800 text-white shadow-sm transition-colors"
+              className="w-full min-h-[46px] inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-bold rounded-xl bg-red-700 hover:bg-red-800 text-white shadow-sm transition-colors"
             >
               <Download className="w-4 h-4" />
-              Save JSON Backup to This PC Now
+              Save JSON Backup Now
             </button>
 
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={onSnoozeTwoHours}
-                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                className="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
               >
                 <Clock className="w-3.5 h-3.5" />
-                Remind in 2 Hours
+                Remind in 2h
               </button>
               <button
                 type="button"
                 onClick={onSkipThisWeek}
-                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                className="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800"
               >
                 Skip This Week
               </button>

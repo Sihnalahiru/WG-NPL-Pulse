@@ -58,9 +58,9 @@ interface BelowThreeCollectionPanelProps {
   onUploadWorkbook?: (file: File) => void;
 }
 
-type TargetPresetMode = 'target_20m' | 'target_25m' | 'target_32m' | 'full_due' | 'custom';
+type TargetPresetMode = 'full_due' | 'target_32m' | 'target_25m' | 'target_20m' | 'custom';
 
-const TARGET_MODE_STORAGE_KEY = 'wg_below3_target_mode_v1';
+const TARGET_MODE_STORAGE_KEY = 'wg_below3_target_mode_v2';
 const CUSTOM_TARGET_M_STORAGE_KEY = 'wg_below3_custom_target_m_v1';
 
 export function BelowThreeCollectionPanel({
@@ -83,10 +83,10 @@ export function BelowThreeCollectionPanel({
     try {
       const saved = window.localStorage.getItem(TARGET_MODE_STORAGE_KEY);
       if (
-        saved === 'target_20m' ||
-        saved === 'target_25m' ||
-        saved === 'target_32m' ||
         saved === 'full_due' ||
+        saved === 'target_32m' ||
+        saved === 'target_25m' ||
+        saved === 'target_20m' ||
         saved === 'custom'
       ) {
         return saved;
@@ -94,7 +94,7 @@ export function BelowThreeCollectionPanel({
     } catch {
       // ignore storage access issues
     }
-    return 'target_20m';
+    return 'full_due';
   });
 
   const [customTargetM, setCustomTargetM] = useState<string>(() => {
@@ -143,31 +143,46 @@ export function BelowThreeCollectionPanel({
   const isFromBmDashboardSheet = snapshot.source === 'bm_dashboard_sheet';
   const isBmReconciledSnapshot = snapshot.source === 'bm_reconciled_snapshot';
 
-  // Active Monthly Target benchmark (Rs. 20M+ floor, 25M, 32M BM Plan, Full Due, or Custom)
+  // When exact BM Dashboard sheet Below-3 data arrives, automatically align tracker to BM Sheet Target
+  useEffect(() => {
+    if (isFromBmDashboardSheet) {
+      setTargetMode('full_due');
+    }
+  }, [isFromBmDashboardSheet, snapshot.bmSheetTargetAmount]);
+
+  // Active Monthly Target benchmark (BM Dashboard Below-3 Target default, or optional 32M / 25M / 20M / Custom comparisons)
   const activeBranchTarget = useMemo(() => {
     if (targetMode === 'target_20m') {
-      return { amount: 20_000_000, label: 'Rs. 20M Monthly Target', shortLabel: '20M Target' };
+      return { amount: 20_000_000, label: 'Rs. 20M Floor Benchmark', shortLabel: '20M Floor' };
     }
     if (targetMode === 'target_25m') {
-      return { amount: 25_000_000, label: 'Rs. 25M Stretch Target', shortLabel: '25M Target' };
+      return { amount: 25_000_000, label: 'Rs. 25M Stretch Benchmark', shortLabel: '25M Stretch' };
     }
     if (targetMode === 'target_32m') {
-      return { amount: 32_000_000, label: 'Rs. 32M BM Plan Target', shortLabel: '32M Target' };
+      return { amount: 32_000_000, label: 'Rs. 32M Plan Benchmark', shortLabel: '32M Plan' };
     }
     if (targetMode === 'custom') {
-      const m = Math.max(1, Number(customTargetM) || 20);
+      const m = Math.max(1, Number(customTargetM) || 32);
       return {
         amount: Math.round(m * 1_000_000),
         label: `Rs. ${m.toFixed(m % 1 === 0 ? 0 : 1)}M Custom Target`,
-        shortLabel: `${m.toFixed(m % 1 === 0 ? 0 : 1)}M Target`,
+        shortLabel: `${m.toFixed(m % 1 === 0 ? 0 : 1)}M Custom`,
       };
     }
     return {
       amount: snapshot.dueAmount,
-      label: isFromBmDashboardSheet ? 'BM Sheet Below-3 Target' : 'Full Monthly Due Budget',
-      shortLabel: isFromBmDashboardSheet ? 'BM Target' : 'Full Due',
+      label: isFromBmDashboardSheet
+        ? `BM Dashboard Below-3 Target (${snapshot.bmSheetName || 'BM Dashboard'})`
+        : 'Branch Below-3 Monthly Target (BM Portfolio)',
+      shortLabel: isFromBmDashboardSheet ? 'BM Sheet Target' : 'Branch Below-3',
     };
-  }, [targetMode, customTargetM, snapshot.dueAmount, isFromBmDashboardSheet]);
+  }, [
+    targetMode,
+    customTargetM,
+    snapshot.dueAmount,
+    snapshot.bmSheetName,
+    isFromBmDashboardSheet,
+  ]);
 
   // Officer-wise target allocation, variance vs. target, and visual performance tiers
   const evaluatedOfficers = useMemo(() => {
@@ -512,36 +527,50 @@ export function BelowThreeCollectionPanel({
         />
       )}
 
-      {/* Interactive Monthly Target Benchmark (20M+ Floor to Full Due) & Milestone Tracker */}
+      {/* Interactive Monthly Target Benchmark (BM Dashboard Below-3 Target) & Milestone Tracker */}
       <section
         aria-label="Monthly Target Benchmark and Variance Progress"
         className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 space-y-4 tabular-nums"
       >
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Target className="w-4 h-4 text-red-700 dark:text-red-400 shrink-0" />
               <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                Monthly Target Benchmark &amp; Variance Tracker (20M+ Performance)
+                Monthly Target Benchmark &amp; Variance Tracker
               </h3>
+              <span
+                className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                  isFromBmDashboardSheet
+                    ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                    : 'bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                }`}
+              >
+                {isFromBmDashboardSheet
+                  ? `Exact "${snapshot.bmSheetName || 'BM Dashboard'}" Below-3 Report`
+                  : 'Reconciled BM Portfolio (Upload Excel for Exact BM Sheet Bottom Table)'}
+              </span>
             </div>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-              Compare actual Below-3 collection against the Rs. 20M+ monthly floor, 32M branch plan, or full monthly due budget with pro-rata officer targets.
+              Tracks exact Below-3 Collection against the BM Dashboard sheet Below-3 target ({formatCompactRs(snapshot.dueAmount)}) with officer-wise actual variance.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 max-w-full">
             <div
               role="group"
               aria-label="Select Monthly Target Benchmark"
-              className="inline-flex flex-wrap items-center gap-1 p-1 rounded-lg bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800"
+              className="inline-flex max-w-full overflow-x-auto no-scrollbar items-center gap-1 p-1 rounded-lg bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800"
             >
               {(
                 [
-                  { id: 'target_20m', label: '20M Target' },
-                  { id: 'target_25m', label: '25M Stretch' },
+                  {
+                    id: 'full_due',
+                    label: isFromBmDashboardSheet ? 'BM Sheet Target' : 'Branch Below-3',
+                  },
                   { id: 'target_32m', label: '32M Plan' },
-                  { id: 'full_due', label: isFromBmDashboardSheet ? 'BM Sheet' : 'Full Due' },
+                  { id: 'target_25m', label: '25M Stretch' },
+                  { id: 'target_20m', label: '20M Floor' },
                   { id: 'custom', label: 'Custom' },
                 ] as const
               ).map((preset) => (
@@ -549,7 +578,7 @@ export function BelowThreeCollectionPanel({
                   key={preset.id}
                   type="button"
                   onClick={() => setTargetMode(preset.id)}
-                  className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`min-h-[34px] px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     targetMode === preset.id
                       ? 'bg-red-700 text-white shadow-xs'
                       : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
@@ -584,14 +613,14 @@ export function BelowThreeCollectionPanel({
         {/* Visual Milestone Gauge */}
         {(() => {
           const maxScale = Math.max(
-            35_000_000,
-            snapshot.dueAmount,
-            activeBranchTarget.amount,
+            snapshot.dueAmount * 1.05,
+            activeBranchTarget.amount * 1.05,
             snapshot.collectedAmount * 1.05,
+            25_000_000,
           );
           const collectedPctBar = Math.min(100, (snapshot.collectedAmount / maxScale) * 100);
           const m20Pos = Math.min(98, (20_000_000 / maxScale) * 100);
-          const m32Pos = Math.min(98, (32_000_000 / maxScale) * 100);
+          const bmTargetPos = Math.min(98, (snapshot.dueAmount / maxScale) * 100);
           const activeTargetPos = Math.min(99, (activeBranchTarget.amount / maxScale) * 100);
 
           return (
@@ -608,17 +637,17 @@ export function BelowThreeCollectionPanel({
                   style={{ width: `${collectedPctBar}%` }}
                 />
 
-                {/* 20M Milestone Tick */}
+                {/* 20M Reference Tick */}
                 <div
-                  className="absolute top-0 bottom-0 w-0.5 bg-zinc-900/70 dark:bg-white/70"
+                  className="absolute top-0 bottom-0 w-0.5 bg-zinc-900/60 dark:bg-white/60"
                   style={{ left: `${m20Pos}%` }}
-                  title="Rs. 20M Monthly Target Floor"
+                  title="Rs. 20M Milestone Reference"
                 />
-                {/* 32M Milestone Tick */}
+                {/* BM Below-3 Target Tick */}
                 <div
                   className="absolute top-0 bottom-0 w-0.5 bg-zinc-500/70 dark:bg-zinc-400/70"
-                  style={{ left: `${m32Pos}%` }}
-                  title="Rs. 32M BM Plan Benchmark"
+                  style={{ left: `${bmTargetPos}%` }}
+                  title={`BM Below-3 Target: ${formatCompactRs(snapshot.dueAmount)}`}
                 />
                 {/* Active Selected Target Pin */}
                 <div
@@ -1164,7 +1193,150 @@ export function BelowThreeCollectionPanel({
           )}
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Mobile Touch Cards View (No Sideways Table Scroll on Phones) */}
+        <div className="md:hidden divide-y divide-zinc-200 dark:divide-zinc-800 tabular-nums">
+          {evaluatedOfficers.map((row) => {
+            const isSelected = selectedOfficer === row.officer;
+            const isSurplus = row.targetVariance >= 0;
+            const barWidthPct = Math.min(100, (row.targetAchPct / 130) * 100);
+            const targetTickPct = (100 / 130) * 100;
+
+            return (
+              <button
+                key={row.officer}
+                type="button"
+                onClick={() => {
+                  setSelectedOfficer(isSelected ? 'ALL' : row.officer);
+                  setVisibleLimit(30);
+                }}
+                className={`w-full text-left p-4 space-y-3 transition-colors active:bg-zinc-100/80 dark:active:bg-zinc-800/60 ${
+                  isSelected ? 'bg-red-50/80 dark:bg-red-950/35' : ''
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <UserAvatar name={row.officer} sizeClass="w-8 h-8 text-[10px]" />
+                    <div className="min-w-0">
+                      <div className="font-bold text-xs text-zinc-900 dark:text-zinc-100 truncate">
+                        {row.officer}
+                      </div>
+                      <div className="text-[10px] font-mono text-zinc-500 dark:text-zinc-400">
+                        {row.role} · {row.totalCount.toLocaleString()} accts ·{' '}
+                        <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                          {row.paidCount}P
+                        </span>
+                        /
+                        <span className="text-red-700 dark:text-red-400 font-semibold">
+                          {row.notPaidCount}NP
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-right shrink-0">
+                    <div
+                      className={`font-mono text-xs font-bold ${
+                        isSurplus
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : 'text-red-700 dark:text-red-400'
+                      }`}
+                    >
+                      {isSurplus ? '+' : ''}
+                      {formatCompactRs(row.targetVariance)}
+                    </div>
+                    <div className="text-[10px] font-mono font-bold text-zinc-700 dark:text-zinc-300">
+                      {row.targetAchPct.toFixed(1)}%
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-[11px] font-mono bg-zinc-50 dark:bg-zinc-950/70 border border-zinc-200/70 dark:border-zinc-800 rounded-xl p-2.5">
+                  <div>
+                    <div className="text-[10px] font-sans text-zinc-500">Target</div>
+                    <div className="font-semibold text-zinc-900 dark:text-zinc-100">
+                      {formatCompactRs(row.targetAmount)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-sans text-zinc-500">Collected</div>
+                    <div className="font-bold text-emerald-700 dark:text-emerald-400">
+                      {formatCompactRs(row.collectedAmount)}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[10px] font-sans text-zinc-500">Needed</div>
+                    <div
+                      className={`font-bold ${
+                        row.contractsNeededForTarget === 0
+                          ? 'text-emerald-700 dark:text-emerald-400'
+                          : 'text-amber-700 dark:text-amber-400'
+                      }`}
+                    >
+                      {row.contractsNeededForTarget === 0
+                        ? 'Met'
+                        : `${row.contractsNeededForTarget} accts`}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="relative h-2 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-visible">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      row.perfTier === 'exceeded'
+                        ? 'bg-emerald-600'
+                        : row.perfTier === 'near'
+                          ? 'bg-amber-500'
+                          : 'bg-red-600'
+                    }`}
+                    style={{ width: `${barWidthPct}%` }}
+                  />
+                  <div
+                    className="absolute -top-0.5 -bottom-0.5 w-0.5 bg-zinc-900/60 dark:bg-white/60"
+                    style={{ left: `${targetTickPct}%` }}
+                  />
+                </div>
+              </button>
+            );
+          })}
+
+          {/* Mobile Branch Total Summary Card */}
+          <div className="p-4 bg-zinc-900 text-white dark:bg-zinc-950 border-t-2 border-red-700 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-bold uppercase tracking-wide">
+                Branch Total ({evaluatedOfficers.length} Officers)
+              </div>
+              <span className="font-mono text-xs font-bold text-amber-300">
+                {branchTargetStats.targetAchPct.toFixed(1)}%
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 font-mono text-xs">
+              <div>
+                <div className="text-[10px] font-sans text-zinc-400">Target</div>
+                <div className="font-bold">{formatCompactRs(branchTargetStats.targetAmount)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] font-sans text-zinc-400">Collected</div>
+                <div className="font-bold text-emerald-400">
+                  {formatCompactRs(snapshot.collectedAmount)}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-[10px] font-sans text-zinc-400">Variance</div>
+                <div
+                  className={`font-bold ${
+                    branchTargetStats.targetVariance >= 0 ? 'text-emerald-400' : 'text-red-400'
+                  }`}
+                >
+                  {branchTargetStats.targetVariance >= 0 ? '+' : ''}
+                  {formatCompactRs(branchTargetStats.targetVariance)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Desktop / Tablet Matrix Table */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead className="bg-zinc-50 dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
               <tr>

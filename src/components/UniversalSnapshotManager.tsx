@@ -148,9 +148,15 @@ export function UniversalSnapshotManager({
   }, [selectedEl, hoveredEl]);
 
   useEffect(() => {
+    const supportsDesktopHover =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+
     const shouldTrackHover =
       !waShareModal &&
-      ((mode === 'pick' && !selectedEl) || (mode === 'off' && hoverQuickBarEnabled));
+      ((mode === 'pick' && !selectedEl) ||
+        (mode === 'off' && hoverQuickBarEnabled && supportsDesktopHover));
 
     if (!shouldTrackHover) {
       if (mode !== 'pick') {

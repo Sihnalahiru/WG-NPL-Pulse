@@ -171,12 +171,15 @@ export function AdminLoginModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/60 backdrop-blur-xs"
       role="dialog"
       aria-modal="true"
       aria-labelledby="admin-modal-title"
     >
-      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl">
+      <div className="w-full max-w-md max-h-[92dvh] overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-t-3xl sm:rounded-2xl shadow-2xl pb-safe">
+        <div className="sm:hidden pt-2.5 flex justify-center">
+          <div className="w-10 h-1.5 rounded-full bg-slate-300 dark:bg-slate-700" />
+        </div>
         <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <SecurityVaultIllustration className="w-10 h-10 shrink-0" />
@@ -198,7 +201,7 @@ export function AdminLoginModal({
             type="button"
             onClick={onClose}
             aria-label="Close admin modal"
-            className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+            className="min-w-[38px] min-h-[38px] flex items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             <X className="w-4 h-4" />
           </button>

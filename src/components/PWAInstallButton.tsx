@@ -17,9 +17,15 @@ const COMPANY_LOGO_FALLBACK_URL =
 
 interface PWAInstallButtonProps {
   compact?: boolean;
+  fullWidth?: boolean;
+  showLabelAlways?: boolean;
 }
 
-export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
+export function PWAInstallButton({
+  compact = false,
+  fullWidth = false,
+  showLabelAlways = false,
+}: PWAInstallButtonProps) {
   const { isInstallable, isInstalled, isIOS, isWindows, isInIframe, install } =
     usePWAInstall();
   const { t } = useLanguage();
@@ -54,31 +60,38 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
       <button
         type="button"
         onClick={handleClick}
-        title="Install WG Pulse as a standalone Windows PC / Desktop App"
+        title="Install WG Pulse on Mobile (Android / iOS) or Windows PC"
         data-snapshot-ignore="true"
-        className={`inline-flex items-center gap-1.5 font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
+        className={`inline-flex items-center justify-center gap-1.5 font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
+          fullWidth ? 'w-full min-h-[46px]' : ''
+        } ${
           isInstallable
             ? 'border-red-700 bg-red-700 text-white hover:bg-red-800'
             : 'border-red-200 dark:border-red-900/70 bg-red-50/90 dark:bg-red-950/40 text-red-800 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/50'
         } ${compact ? 'px-2.5 py-1.5 text-[11px]' : 'px-3 py-2 text-xs'}`}
       >
         <MonitorDown className="w-3.5 h-3.5 shrink-0" />
-        <span className="hidden sm:inline">{t('installApp')}</span>
+        <span className={showLabelAlways ? 'inline' : 'hidden sm:inline'}>
+          {t('installApp')}
+        </span>
       </button>
 
       {showGuide && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Install WG Pulse on Windows PC or Mobile"
+          aria-label="Install WG Pulse on Mobile or Windows PC"
           data-snapshot-ignore="true"
-          className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-zinc-950/65 backdrop-blur-xs"
+          className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-zinc-950/65 backdrop-blur-xs"
           onClick={() => setShowGuide(false)}
         >
           <div
-            className="w-full max-w-lg rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-2xl overflow-hidden"
+            className="w-full max-w-lg max-h-[90dvh] overflow-y-auto rounded-t-3xl sm:rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-2xl pb-safe"
             onClick={(e) => e.stopPropagation()}
           >
+            <div className="sm:hidden pt-2.5 flex justify-center bg-red-50/70 dark:bg-red-950/30">
+              <div className="w-10 h-1.5 rounded-full bg-zinc-300 dark:bg-zinc-700" />
+            </div>
             <div className="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-3 bg-red-50/70 dark:bg-red-950/30">
               <div className="flex items-center gap-2.5">
                 <div className="p-1.5 rounded-xl bg-white border border-red-200 shadow-xs">
@@ -96,10 +109,10 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                    Install WG Pulse as a Windows PC App
+                    Install WG Pulse (Mobile &amp; PC App)
                   </h3>
                   <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                    Standalone desktop window · Commercial Credit App Icon · Offline cache
+                    Standalone Mobile &amp; Desktop App · Auto Live Sync · Offline Ready
                   </p>
                 </div>
               </div>
@@ -107,7 +120,7 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
                 type="button"
                 onClick={() => setShowGuide(false)}
                 aria-label="Close install guide"
-                className="p-1.5 rounded-lg text-zinc-500 hover:bg-zinc-200/70 dark:hover:bg-zinc-800"
+                className="min-w-[38px] min-h-[38px] flex items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-200/70 dark:hover:bg-zinc-800"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -117,10 +130,10 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
               {isInIframe && (
                 <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 space-y-2">
                   <p className="font-semibold">
-                    Open in a normal Chrome / Edge browser tab to trigger Windows 1-click install:
+                    Open in Chrome, Edge, or Safari to trigger 1-tap app install:
                   </p>
                   <p className="text-[11px] leading-relaxed">
-                    Browser security blocks desktop app installation inside embedded preview frames. Copy this app link and open it directly in Microsoft Edge or Google Chrome on Windows:
+                    Browser security blocks app installation inside embedded preview frames. Copy this app link and open it directly on your phone or Windows PC:
                   </p>
                   <div className="flex items-center gap-2">
                     <code className="flex-1 px-2.5 py-1.5 rounded-lg bg-white/80 dark:bg-slate-950 border border-amber-200 dark:border-amber-900 font-mono text-[10px] truncate">
@@ -129,7 +142,7 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
                     <button
                       type="button"
                       onClick={handleCopyUrl}
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold shrink-0"
+                      className="inline-flex items-center gap-1 min-h-[36px] px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold shrink-0"
                     >
                       {copiedUrl ? (
                         <>
@@ -151,6 +164,24 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
                 <div className="space-y-3">
                   <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 space-y-2">
                     <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-slate-100">
+                      <Smartphone className="w-4 h-4 text-red-700 dark:text-red-400" />
+                      Android Phone — Google Chrome
+                    </div>
+                    <ol className="list-decimal list-inside space-y-1 text-[11px] leading-relaxed">
+                      <li>
+                        Open WG Pulse in <strong>Google Chrome</strong> on your phone.
+                      </li>
+                      <li>
+                        Tap the menu (<strong>⋮</strong>) at the top-right → <strong>Add to Home screen</strong> / <strong>Install app</strong>.
+                      </li>
+                      <li>
+                        Tap <strong>Install</strong> to launch WG Pulse full-screen like a native Android app.
+                      </li>
+                    </ol>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 space-y-2">
+                    <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-slate-100">
                       <Download className="w-4 h-4 text-emerald-600" />
                       Windows PC — Google Chrome / Microsoft Edge
                     </div>
@@ -163,10 +194,7 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
                         <span className="font-mono px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800">
                           ⊕ / App Install
                         </span>{' '}
-                        at the right end of the address bar (or click <strong>Install PC App</strong> in the WG Pulse header).
-                      </li>
-                      <li>
-                        Or open the browser menu (<strong>⋮</strong> in Chrome / <strong>⋯</strong> in Edge) → <strong>Apps</strong> → <strong>Install WG Pulse</strong>.
+                        at the right end of the address bar.
                       </li>
                       <li>
                         Tick <strong>Pin to Taskbar</strong> &amp; <strong>Create Desktop Shortcut</strong> to launch WG Pulse just like a native Windows program.
@@ -176,7 +204,7 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
 
                   {isWindows && (
                     <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                      සිංහල: Windows PC එකේ Chrome හෝ Edge browser එකේ address bar එකේ දකුණු කෙළවරේ ඇති <strong>Install</strong> icon එක click කර <strong>Install</strong> ඔබන්න. එවිට Desktop icon එකක් සහ Start Menu app එකක් ලෙස WG Pulse ස්ථාපනය වේ.
+                      සිංහල: Windows PC එකේ Chrome/Edge address bar එකේ දකුණු කෙළවරේ <strong>Install</strong> icon එක click කරන්න. Android phone එකේ Chrome menu (⋮) → <strong>Install app</strong> ඔබන්න.
                     </p>
                   )}
                 </div>
@@ -194,7 +222,7 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
                       Scroll down and tap <strong>Add to Home Screen</strong>.
                     </li>
                     <li>
-                      Tap <strong>Add</strong> to launch WG Pulse as a full-screen app.
+                      Tap <strong>Add</strong> to launch WG Pulse as a full-screen mobile app.
                     </li>
                   </ol>
                 </div>
@@ -204,7 +232,7 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
                 <button
                   type="button"
                   onClick={() => setShowGuide(false)}
-                  className="px-4 py-2 text-xs font-semibold rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 hover:opacity-90"
+                  className="w-full sm:w-auto min-h-[44px] px-5 py-2 text-xs font-semibold rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 hover:opacity-90"
                 >
                   Got It
                 </button>
@@ -226,7 +254,7 @@ export function OfflineIndicator() {
     <div
       role="status"
       data-snapshot-ignore="true"
-      className="fixed bottom-20 left-4 z-50 flex items-center gap-2 rounded-xl bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white shadow-lg border border-amber-400/50"
+      className="fixed bottom-20 md:bottom-20 left-3 right-3 sm:right-auto sm:left-4 z-50 flex items-center justify-center sm:justify-start gap-2 rounded-xl bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white shadow-lg border border-amber-400/50"
     >
       <WifiOff className="w-3.5 h-3.5 shrink-0" />
       Offline Mode — Showing cached local data

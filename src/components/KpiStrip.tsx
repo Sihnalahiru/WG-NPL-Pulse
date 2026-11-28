@@ -166,20 +166,20 @@ export function KpiStrip({
         </span>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
         {/* KPI 1: Closing NPL Portfolio (Exact BM Match) */}
         <div
           style={{ animationDelay: '50ms' }}
-          className="animate-fade-slide-up bg-gradient-to-br from-emerald-900 via-emerald-950 to-slate-950 text-white rounded-2xl p-5 shadow-md border border-emerald-800/60"
+          className="animate-fade-slide-up bg-gradient-to-br from-emerald-900 via-emerald-950 to-slate-950 text-white rounded-2xl p-4 sm:p-5 shadow-md border border-emerald-800/60"
         >
           <div className="flex items-center justify-between gap-2 text-xs font-medium text-emerald-300">
             <span>Closing NPL (Exact BM Total)</span>
             <AlertTriangle className="w-4 h-4 text-emerald-400 shrink-0" />
           </div>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-white tabular-nums font-mono">
+          <p className="mt-2 text-xl sm:text-2xl font-bold tracking-tight text-white tabular-nums font-mono break-words">
             {formatCurrencyRs(animatedClosingNpl)}
           </p>
-          <div className="mt-2 flex items-center justify-between gap-2 text-xs text-emerald-200/90 tabular-nums">
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-emerald-200/90 tabular-nums">
             <span>
               <strong className="font-mono text-white">{metrics.closingNplCount}</strong> NPL accts · {metrics.worstCount} Worst (W)
             </span>
@@ -192,13 +192,13 @@ export function KpiStrip({
         {/* KPI 2: Borderline NPL at Risk */}
         <div
           style={{ animationDelay: '100ms' }}
-          className="animate-fade-slide-up bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs"
+          className="animate-fade-slide-up bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs"
         >
           <div className="flex items-center justify-between gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
             <span>Borderline NPL Risk (Cap+Arr)</span>
             <ShieldAlert className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
           </div>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-amber-700 dark:text-amber-400 tabular-nums font-mono">
+          <p className="mt-2 text-xl sm:text-2xl font-bold tracking-tight text-amber-700 dark:text-amber-400 tabular-nums font-mono break-words">
             {formatCurrencyRs(animatedBorderline)}
           </p>
           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
@@ -209,14 +209,14 @@ export function KpiStrip({
         {/* KPI 3: Below 1 (<= 1.00) 90 Ratio */}
         <div
           style={{ animationDelay: '150ms' }}
-          className="animate-fade-slide-up bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs"
+          className="animate-fade-slide-up bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs"
         >
           <div className="flex items-center justify-between gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
             <span>Below 1 (≤ 1.00) · 90 Ratio</span>
             <Target className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
           </div>
           <p
-            className={`mt-2 text-2xl font-bold tracking-tight tabular-nums font-mono ${
+            className={`mt-2 text-xl sm:text-2xl font-bold tracking-tight tabular-nums font-mono ${
               metrics.ratio90Pct >= 90
                 ? 'text-emerald-700 dark:text-emerald-400'
                 : metrics.ratio90Pct >= 80
@@ -240,7 +240,7 @@ export function KpiStrip({
         {/* KPI 4: Opening vs Closing NPL Movement */}
         <div
           style={{ animationDelay: '200ms' }}
-          className="animate-fade-slide-up bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs"
+          className="animate-fade-slide-up bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs"
         >
           <div className="flex items-center justify-between gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
             <span>Net NPL Movement (Op → Close)</span>

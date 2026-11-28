@@ -965,17 +965,34 @@ function parsePctValue(raw: unknown): number | null {
 
 function parseAmountWithMillionHint(raw: unknown, headerHint = ''): number | null {
   if (raw === null || raw === undefined || raw === '') return null;
-  const str = String(raw).trim();
-  if (!str || str === '-') return null;
-  const hasMillionSuffix = /\b(mn|m|million)\b/i.test(str) || /[0-9]\s*m$/i.test(str);
-  const headerIsMillions = /\b(mn|million|rs\.?\s*m|\(m\))\b/i.test(headerHint);
-  const cleaned = str.replace(/\b(mn|million)\b/gi, '').replace(/m$/i, '').trim();
-  const num = parseNumeric(cleaned);
-  if (!Number.isFinite(num)) return null;
-  if (hasMillionSuffix || headerIsMillions) {
-    return Math.abs(num) < 10_000 ? Math.round(num * 1_000_000) : Math.round(num);
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return null;
+    const headerIsMillions = /\b(mn|million|rs\.?\s*m|\(m\)|\(mn\))\b/i.test(headerHint);
+    if (headerIsMillions && Math.abs(raw) < 10_000) {
+      return Math.round(raw * 1_000_000);
+    }
+    return Math.round(raw);
   }
-  return Math.round(num);
+  const str = String(raw).trim();
+  if (!str || str === '-' || str === '—') return null;
+  // Support accounting parentheses e.g. "(8,450,000.00)" => negative
+  const isAccountingNeg = /^\(.*\)$/.test(str);
+  const unwrapped = isAccountingNeg ? str.slice(1, -1).trim() : str;
+  const hasMillionSuffix =
+    /\b(mn|m|million)\b/i.test(unwrapped) || /[0-9]\s*m$/i.test(unwrapped);
+  const headerIsMillions = /\b(mn|million|rs\.?\s*m|\(m\)|\(mn\))\b/i.test(headerHint);
+  const cleaned = unwrapped
+    .replace(/\b(rs\.?|lkr|mn|million)\b/gi, '')
+    .replace(/m$/i, '')
+    .trim();
+  if (!/\d/.test(cleaned)) return null;
+  const parsed = parseNumeric(cleaned);
+  if (!Number.isFinite(parsed)) return null;
+  const signed = isAccountingNeg ? -Math.abs(parsed) : parsed;
+  if (hasMillionSuffix || headerIsMillions) {
+    return Math.abs(signed) < 10_000 ? Math.round(signed * 1_000_000) : Math.round(signed);
+  }
+  return Math.round(signed);
 }
 
 function parseBmDashboardBelowThree(
@@ -986,22 +1003,29 @@ function parseBmDashboardBelowThree(
   if (!rows || rows.length === 0) return undefined;
 
   const BELOW3_REGEX =
-    /(below\s*[-–_]?\s*3|b\s*[-–_]?\s*3\s*(coll|target|due|age|bucket)|<\s*3(\.00?)?|\b0\s*[-–~]\s*2\.99\b|age\s*<\s*3|below\s+three)/i;
+    /(below\s*[-–_]?\s*3|b\s*[-–_/]?\s*3\s*(coll|target|due|age|bucket|summary|report)?|<\s*3(\.00?)?|\b0\s*[-–~]\s*2\.99\b|age\s*<\s*3|below\s+three)/i;
 
-  const matchOfficer = (raw: string): { officer: string; role?: string } | null => {
+  const matchOfficer = (
+    raw: string,
+  ): { officer: string; role?: string; matchedKnown: boolean } | null => {
     const cleaned = stripOfficerPrefix(raw)
       .replace(/\s*\((ro|mo)\)\s*$/i, '')
+      .replace(/^(ro|mo)\s*[-–:]\s*/i, '')
+      .replace(/\s*[-–:]\s*(ro|mo)$/i, '')
       .trim();
     if (!cleaned || cleaned.length < 2) return null;
     const lower = cleaned.toLowerCase();
     const direct = knownOfficers.get(lower);
-    if (direct) return direct;
+    if (direct) return { ...direct, matchedKnown: true };
     // Partial / token match against known AERS officers (e.g. "Madusanka L" -> "madusankal")
     const compact = lower.replace(/[^a-z0-9]/g, '');
     for (const [k, val] of knownOfficers.entries()) {
       const kc = k.replace(/[^a-z0-9]/g, '');
-      if (kc === compact || (compact.length >= 5 && (kc.includes(compact) || compact.includes(kc)))) {
-        return val;
+      if (
+        kc === compact ||
+        (compact.length >= 4 && (kc.includes(compact) || compact.includes(kc)))
+      ) {
+        return { ...val, matchedKnown: true };
       }
     }
     return null;
@@ -1020,60 +1044,75 @@ function parseBmDashboardBelowThree(
     paidCountCol?: number;
     notPaidCountCol?: number;
     neededCountCol?: number;
+    headerSpanRows: number;
   }
 
-  const detectHeaderCols = (row: unknown[], minCol: number, maxCol: number): ColMap | null => {
-    const map: ColMap = {};
+  const classifyHeaders = (
+    headers: string[],
+    headerSpanRows: number,
+  ): ColMap | null => {
+    const map: ColMap = { headerSpanRows };
     let hits = 0;
-    const end = Math.min(row.length - 1, maxCol);
-    for (let c = Math.max(0, minCol); c <= end; c++) {
-      const h = String(row[c] ?? '').trim().replace(/\s+/g, ' ');
+
+    for (let c = 0; c < headers.length; c++) {
+      const h = headers[c];
       if (!h) continue;
       const hl = h.toLowerCase();
 
       if (
         map.officerCol === undefined &&
-        /^(officer|ro|mo|ro\s*\/\s*mo|name|staff|user|exec|code|recovery\s*officer|marketing\s*officer|assigned\s*officer|category|description|particulars)$/i.test(
+        /^(officer|ro|mo|ro\s*\/\s*mo|ro\s*&\s*mo|officer\s*name|name|staff|user|exec|executive|code|recovery\s*officer|marketing\s*officer|assigned\s*officer|ro\s*name|mo\s*name|category|description|particulars|branch)$/i.test(
           hl,
         )
       ) {
         map.officerCol = c;
       } else if (
         map.pctCol === undefined &&
-        /(%|pct|ach\s*%|coll\s*%|eff\s*%|ratio|rate|achievement\s*%)/i.test(hl) &&
+        /(%|pct|ach\s*%|coll\s*%|eff\s*%|ratio|rate|achievement\s*%|%\s*ach|%\s*coll)/i.test(
+          hl,
+        ) &&
         !/not\s*paid|unpaid/i.test(hl)
       ) {
         map.pctCol = c;
         hits += 1;
       } else if (
         map.notPaidCountCol === undefined &&
-        /(not\s*paid|unpaid|non\s*paid|pending\s*(acct|cont|no|cnt)|np\s*(acct|cont|cnt)?|^np$)/i.test(hl) &&
-        !/amt|amount|rs|val/i.test(hl)
+        /(not\s*paid|unpaid|non\s*paid|pending\s*(acct|cont|no|cnt)|np\s*(acct|cont|cnt)?|^np$|not\s*paid\s*cont)/i.test(
+          hl,
+        ) &&
+        !/amt|amount|rs|val|due|coll/i.test(hl)
       ) {
         map.notPaidCountCol = c;
         hits += 1;
       } else if (
         map.paidCountCol === undefined &&
-        /(paid\s*(acct|cont|no|cnt)|^paid$|^paid\s*count$)/i.test(hl) &&
-        !/not\s*paid|unpaid|amt|amount|rs/i.test(hl)
+        /(paid\s*(acct|cont|no|cnt)|^paid$|^paid\s*count$|paid\s*cont)/i.test(hl) &&
+        !/not\s*paid|unpaid|amt|amount|rs|val/i.test(hl)
       ) {
         map.paidCountCol = c;
         hits += 1;
       } else if (
         map.neededCountCol === undefined &&
-        /(need|req|bal\s*(acct|cont)|to\s*pay\s*(acct|cont)|rem\s*(acct|cont))/i.test(hl)
+        /(need|req|bal\s*(acct|cont)|to\s*pay\s*(acct|cont)|rem\s*(acct|cont))/i.test(
+          hl,
+        ) &&
+        !/amt|amount|rs|val/i.test(hl)
       ) {
         map.neededCountCol = c;
         hits += 1;
       } else if (
         map.totalCountCol === undefined &&
-        /(total\s*(acct|cont|no|cnt)|no\.?\s*of\s*(cont|acct)|^accts?$|^contracts?$|^count$|^nos?\.?$)/i.test(hl)
+        /(total\s*(acct|cont|no|cnt)|no\.?\s*of\s*(cont|acct)|^accts?$|^contracts?$|^count$|^nos?\.?$)/i.test(
+          hl,
+        )
       ) {
         map.totalCountCol = c;
         hits += 1;
       } else if (
         map.varianceCol === undefined &&
-        /(var|variance|bal|balance|short|shortfall|gap|rem|remaining|diff|pending\s*amt|need\s*amt)/i.test(hl) &&
+        /(var|variance|bal\s*(to\s*coll|amt|due)?|^balance$|short|shortfall|gap|rem|remaining|diff|pending\s*amt|need\s*amt|to\s*be\s*coll)/i.test(
+          hl,
+        ) &&
         !/%|acct|cont|count/i.test(hl)
       ) {
         map.varianceCol = c;
@@ -1081,18 +1120,23 @@ function parseBmDashboardBelowThree(
         hits += 1;
       } else if (
         map.targetCol === undefined &&
-        /(target|budget|monthly\s*due|due\s*budget|due\s*amt|collectible|b3\s*due|b3\s*target|below\s*3\s*(target|due)|^due$)/i.test(
+        /(target|budget|collectible|due\s*budget|monthly\s*due|total\s*due|curr(ent)?\s*month\s*due|due\s*amt|due\s*amount|due\s*val|b\s*\/?\s*3\s*(target|due)|below\s*3\s*(target|due|budget)|<\s*3\s*(target|due)|^due(\s*\(.*\))?$|^plan$)/i.test(
           hl,
         ) &&
-        !/%|acct|cont|count|coll|actual|ach/i.test(hl)
+        !/%|acct|cont|count|variance|shortfall|balance|gap|not\s*paid|unpaid/i.test(hl) &&
+        !(/\b(collection|collected|actual|received|recovered)\b/i.test(hl) && !/collectible/i.test(hl))
       ) {
         map.targetCol = c;
         map.targetHint = h;
         hits += 1;
       } else if (
         map.collectedCol === undefined &&
-        /(coll|collection|collected|actual|achiev|received|cash\s*coll|total\s*coll|paid\s*amt)/i.test(hl) &&
-        !/%|rate|ratio|eff|target|due|budget|acct|cont|count/i.test(hl)
+        /(collection|collected|actual|achiev|received|recovered|cash\s*coll|total\s*coll|b\s*\/?\s*3\s*coll|below\s*3\s*coll|<\s*3\s*coll|paid\s*amt|paid\s*amount|^coll(\s*\(.*\))?$)/i.test(
+          hl,
+        ) &&
+        !/collectible|%|rate|ratio|eff|target|budget|variance|shortfall|balance|acct|cont|count|not\s*paid|unpaid/i.test(
+          hl,
+        )
       ) {
         map.collectedCol = c;
         map.collectedHint = h;
@@ -1100,12 +1144,66 @@ function parseBmDashboardBelowThree(
       }
     }
 
-    if ((map.targetCol !== undefined || map.collectedCol !== undefined) && hits >= 2) {
+    if (map.targetCol !== undefined && map.collectedCol !== undefined && hits >= 2) {
       return map;
     }
     return null;
   };
 
+  const detectHeaderCols = (
+    row: unknown[],
+    nextRow?: unknown[],
+  ): ColMap | null => {
+    const singleHeaders = row.map((cell) =>
+      String(cell ?? '').trim().replace(/\s+/g, ' '),
+    );
+    const singleMatch = classifyHeaders(singleHeaders, 1);
+    if (singleMatch) return singleMatch;
+
+    if (nextRow && nextRow.length > 0) {
+      const maxLen = Math.max(row.length, nextRow.length);
+      const mergedHeaders: string[] = [];
+      let lastTop = '';
+      for (let c = 0; c < maxLen; c++) {
+        const top = String(row[c] ?? '').trim().replace(/\s+/g, ' ');
+        const sub = String(nextRow[c] ?? '').trim().replace(/\s+/g, ' ');
+        if (top) lastTop = top;
+        const effectiveTop = top || (sub && lastTop && !BELOW3_REGEX.test(lastTop) ? lastTop : '');
+        const combined =
+          effectiveTop && sub && effectiveTop.toLowerCase() !== sub.toLowerCase()
+            ? `${effectiveTop} ${sub}`
+            : sub || top;
+        mergedHeaders.push(combined);
+      }
+      const mergedMatch = classifyHeaders(mergedHeaders, 2);
+      if (mergedMatch) return mergedMatch;
+    }
+
+    return null;
+  };
+
+  // Extract best text label to the left of targetCol (handles leading serial # column e.g. Col A = 1, Col B = Officer)
+  const extractRowLabel = (
+    drow: unknown[],
+    cols: ColMap,
+    fallbackCol: number,
+  ): string => {
+    if (cols.officerCol !== undefined) {
+      const direct = String(drow[cols.officerCol] ?? '').trim();
+      if (direct && !/^\d+$/.test(direct)) return direct;
+    }
+    const maxScan = Math.min(
+      drow.length - 1,
+      Math.min(cols.targetCol ?? drow.length, cols.collectedCol ?? drow.length) - 1,
+    );
+    for (let c = 0; c <= Math.max(0, maxScan); c++) {
+      const val = String(drow[c] ?? '').trim();
+      if (val && !/^\d+(\.\d+)?$/.test(val)) return val;
+    }
+    return String(drow[fallbackCol] ?? '').trim();
+  };
+
+  let bestScore = -1;
   let bestTarget = 0;
   let bestCollected = 0;
   let bestVariance: number | null = null;
@@ -1114,49 +1212,84 @@ function parseBmDashboardBelowThree(
   let bestPaidCount: number | undefined;
   let bestNotPaidCount: number | undefined;
   let bestNeededCount: number | undefined;
-  const officerMap = new Map<
-    string,
-    BmDashboardBelowThreeExtracted['byOfficer'][number]
-  >();
+  let bestOfficers: BmDashboardBelowThreeExtracted['byOfficer'] = [];
 
-  // Locate every cell mentioning "Below 3"
-  const anchorCells: { r: number; c: number; text: string }[] = [];
+  // Locate every cell mentioning "Below 3" across the entire BM Dashboard sheet
+  const anchorCells: { r: number; c: number; text: string; isBelow3Coll: boolean }[] = [];
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r] || [];
     for (let c = 0; c < row.length; c++) {
       const txt = String(row[c] ?? '').trim();
-      if (txt && txt.length <= 120 && BELOW3_REGEX.test(txt)) {
-        anchorCells.push({ r, c, text: txt });
+      if (txt && txt.length <= 140 && BELOW3_REGEX.test(txt)) {
+        const isBelow3Coll = /coll|target|due|summary|report|performance|variance/i.test(txt);
+        anchorCells.push({ r, c, text: txt, isBelow3Coll });
       }
     }
   }
 
   for (const anchor of anchorCells) {
-    // Strategy 1: Header row is at anchor.r .. anchor.r + 5 (Below 3 Collection officer/summary table)
+    // Bottom-of-sheet "Below 3 Collection" report gets priority over incidental top-of-sheet mentions
+    const bottomBonus = anchor.r >= Math.floor(rows.length * 0.45) ? 20 : 0;
+    const titleBonus = anchor.isBelow3Coll ? 30 : 0;
+
     let tableFound = false;
-    for (let hr = anchor.r; hr <= Math.min(rows.length - 1, anchor.r + 5); hr++) {
-      const cols = detectHeaderCols(rows[hr] || [], anchor.c - 2, anchor.c + 18);
+    for (let hr = anchor.r; hr <= Math.min(rows.length - 1, anchor.r + 6); hr++) {
+      const cols = detectHeaderCols(rows[hr] || [], rows[hr + 1]);
       if (!cols || cols.targetCol === undefined || cols.collectedCol === undefined) continue;
 
       tableFound = true;
-      const labelCol = cols.officerCol ?? anchor.c;
-      let blankStreak = 0;
+      const localOfficers = new Map<
+        string,
+        BmDashboardBelowThreeExtracted['byOfficer'][number]
+      >();
+      let grandTotalRow: {
+        target: number;
+        collected: number;
+        variance: number | null;
+        pct: number | null;
+        totCnt?: number;
+        paidCnt?: number;
+        npCnt?: number;
+        needCnt?: number;
+      } | null = null;
+      let subTotalSumTarget = 0;
+      let subTotalSumCollected = 0;
+      let subTotalCount = 0;
 
-      for (let dr = hr + 1; dr <= Math.min(rows.length - 1, hr + 35); dr++) {
+      let blankStreak = 0;
+      const startDataRow = hr + cols.headerSpanRows;
+
+      for (let dr = startDataRow; dr <= Math.min(rows.length - 1, startDataRow + 50); dr++) {
         const drow = rows[dr] || [];
-        const rawLabel = String(drow[labelCol] ?? drow[anchor.c] ?? '').trim();
+        const rawLabel = extractRowLabel(drow, cols, anchor.c);
         const tVal = parseAmountWithMillionHint(drow[cols.targetCol], cols.targetHint);
         const cVal = parseAmountWithMillionHint(drow[cols.collectedCol], cols.collectedHint);
 
         if (!rawLabel && tVal === null && cVal === null) {
           blankStreak += 1;
-          if (blankStreak >= 2) break;
+          if (blankStreak >= 3) break;
           continue;
         }
         blankStreak = 0;
 
-        const isTotalRow =
-          /^(grand\s*)?(branch\s*)?(sub\s*)?total\b|^all\b|^branch\s*total$|^total\s*below\s*3/i.test(
+        // Stop if we hit an unrelated new section header after already reading rows
+        if (
+          (localOfficers.size > 0 || grandTotalRow !== null) &&
+          tVal === null &&
+          cVal === null &&
+          /^(npl|worst|age\s*bucket|summary|ratio|90\s*ratio|incentive|remarks)/i.test(rawLabel)
+        ) {
+          break;
+        }
+
+        const isGrandTotalRow =
+          /^(grand\s*total|branch\s*total|total\s*below\s*3|below\s*3\s*total|overall\s*total|all\s*branch|total)$/i.test(
+            rawLabel.replace(/[:\-]+$/g, '').trim(),
+          ) || /^(grand|branch)\s+total\b/i.test(rawLabel);
+
+        const isSubTotalRow =
+          !isGrandTotalRow &&
+          /^(ro\s*total|mo\s*total|sub\s*total|subtotal|recovery\s*total|marketing\s*total|total\s*ro|total\s*mo)/i.test(
             rawLabel,
           );
 
@@ -1166,86 +1299,190 @@ function parseBmDashboardBelowThree(
             : null;
         const pVal = cols.pctCol !== undefined ? parsePctValue(drow[cols.pctCol]) : null;
         const totCnt =
-          cols.totalCountCol !== undefined ? Math.round(parseNumeric(drow[cols.totalCountCol])) : undefined;
+          cols.totalCountCol !== undefined && /\d/.test(String(drow[cols.totalCountCol] ?? ''))
+            ? Math.round(parseNumeric(drow[cols.totalCountCol]))
+            : undefined;
         const paidCnt =
-          cols.paidCountCol !== undefined ? Math.round(parseNumeric(drow[cols.paidCountCol])) : undefined;
+          cols.paidCountCol !== undefined && /\d/.test(String(drow[cols.paidCountCol] ?? ''))
+            ? Math.round(parseNumeric(drow[cols.paidCountCol]))
+            : undefined;
         const npCnt =
-          cols.notPaidCountCol !== undefined
+          cols.notPaidCountCol !== undefined && /\d/.test(String(drow[cols.notPaidCountCol] ?? ''))
             ? Math.round(parseNumeric(drow[cols.notPaidCountCol]))
             : undefined;
         const needCnt =
-          cols.neededCountCol !== undefined
+          cols.neededCountCol !== undefined && /\d/.test(String(drow[cols.neededCountCol] ?? ''))
             ? Math.round(parseNumeric(drow[cols.neededCountCol]))
             : undefined;
 
-        if (isTotalRow && tVal && tVal > 0 && cVal !== null && cVal >= 0) {
-          if (tVal > bestTarget) {
-            bestTarget = tVal;
-            bestCollected = cVal;
-            bestVariance = vVal;
-            bestPct = pVal;
-            if (totCnt && totCnt > 0) bestTotalCount = totCnt;
-            if (paidCnt !== undefined && paidCnt > 0) bestPaidCount = paidCnt;
-            if (npCnt !== undefined && npCnt >= 0) bestNotPaidCount = npCnt;
-            if (needCnt !== undefined && needCnt >= 0) bestNeededCount = needCnt;
+        if (isGrandTotalRow && tVal && tVal > 0 && cVal !== null && cVal >= 0) {
+          // Keep the largest grand total if both subtotal and grand total share label "Total"
+          if (!grandTotalRow || tVal >= grandTotalRow.target) {
+            grandTotalRow = {
+              target: tVal,
+              collected: cVal,
+              variance: vVal,
+              pct: pVal,
+              totCnt: totCnt && totCnt > 0 ? totCnt : undefined,
+              paidCnt: paidCnt !== undefined && paidCnt >= 0 ? paidCnt : undefined,
+              npCnt: npCnt !== undefined && npCnt >= 0 ? npCnt : undefined,
+              needCnt: needCnt !== undefined && needCnt >= 0 ? needCnt : undefined,
+            };
           }
-          break;
+          // Do NOT break immediately if label was simply "Total" and RO/MO tables are stacked;
+          // break only on explicit "Grand Total" / "Branch Total"
+          if (/grand|branch|overall|below\s*3/i.test(rawLabel)) {
+            break;
+          }
+          continue;
         }
 
-        const matchedOff = matchOfficer(rawLabel);
-        if (matchedOff && tVal !== null && tVal > 0 && cVal !== null && cVal >= 0) {
-          const variance = Math.round(cVal - tVal);
-          const pct =
-            pVal !== null && pVal >= 0
-              ? pVal
-              : tVal > 0
-                ? Math.round((cVal / tVal) * 1000) / 10
-                : 0;
-          officerMap.set(matchedOff.officer, {
-            officer: matchedOff.officer,
-            role: matchedOff.role,
-            targetAmount: tVal,
-            collectedAmount: cVal,
-            varianceAmount: variance,
-            collectionPct: pct,
-            totalCount: totCnt && totCnt > 0 ? totCnt : undefined,
-            paidCount: paidCnt !== undefined && paidCnt >= 0 ? paidCnt : undefined,
-            notPaidCount: npCnt !== undefined && npCnt >= 0 ? npCnt : undefined,
-            contractsNeeded: needCnt !== undefined && needCnt >= 0 ? needCnt : undefined,
-          });
+        if (isSubTotalRow && tVal && tVal > 0 && cVal !== null && cVal >= 0) {
+          subTotalSumTarget += tVal;
+          subTotalSumCollected += cVal;
+          subTotalCount += 1;
+          continue;
+        }
+
+        // Skip secondary header rows (e.g., stacked MO section header) or age-bucket labels
+        const isSectionDivider =
+          /^(ro|mo|officer|recovery\s*officers?|marketing\s*officers?|name|age|bucket|\[[a-i]\])/i.test(
+            rawLabel,
+          );
+        if (isSectionDivider) continue;
+
+        if (tVal !== null && tVal > 0 && cVal !== null && cVal >= 0 && rawLabel) {
+          const matchedOff = matchOfficer(rawLabel);
+          const cleanName = matchedOff
+            ? matchedOff.officer
+            : stripOfficerPrefix(rawLabel)
+                .replace(/\s*\((ro|mo)\)\s*$/i, '')
+                .trim();
+
+          // Accept known officers, or valid officer-like names (excluding numeric/age-range labels)
+          const looksLikeOfficerName =
+            matchedOff !== null ||
+            (cleanName.length >= 3 &&
+              cleanName.length <= 36 &&
+              /[a-zA-Z]{3,}/.test(cleanName) &&
+              !/\b(total|below|above|zero|npl|age|dpd|target|budget|collection|variance|summary)\b/i.test(
+                cleanName,
+              ));
+
+          if (looksLikeOfficerName) {
+            const variance = Math.round(cVal - tVal);
+            const pct =
+              pVal !== null && pVal >= 0
+                ? pVal
+                : tVal > 0
+                  ? Math.round((cVal / tVal) * 1000) / 10
+                  : 0;
+            localOfficers.set(cleanName.toLowerCase(), {
+              officer: cleanName,
+              role: matchedOff?.role,
+              targetAmount: tVal,
+              collectedAmount: cVal,
+              varianceAmount: variance,
+              collectionPct: pct,
+              totalCount: totCnt && totCnt > 0 ? totCnt : undefined,
+              paidCount: paidCnt !== undefined && paidCnt >= 0 ? paidCnt : undefined,
+              notPaidCount: npCnt !== undefined && npCnt >= 0 ? npCnt : undefined,
+              contractsNeeded: needCnt !== undefined && needCnt >= 0 ? needCnt : undefined,
+            });
+          }
         }
       }
+
+      const officersList = Array.from(localOfficers.values());
+      const officerSumTarget = officersList.reduce((s, o) => s + o.targetAmount, 0);
+      const officerSumCollected = officersList.reduce((s, o) => s + o.collectedAmount, 0);
+
+      // Determine authoritative total for this table
+      let candidateTarget = grandTotalRow?.target ?? 0;
+      let candidateCollected = grandTotalRow?.collected ?? 0;
+      let candidateVariance = grandTotalRow?.variance ?? null;
+      let candidatePct = grandTotalRow?.pct ?? null;
+
+      if (officersList.length >= 2 && officerSumTarget > candidateTarget * 1.15) {
+        // E.g. only an RO "Total" row was matched while both RO & MO officer rows were captured
+        candidateTarget = officerSumTarget;
+        candidateCollected = officerSumCollected;
+        candidateVariance = null;
+        candidatePct = null;
+      } else if (candidateTarget === 0 && subTotalCount >= 1) {
+        candidateTarget = subTotalSumTarget;
+        candidateCollected = subTotalSumCollected;
+      } else if (candidateTarget === 0 && officersList.length >= 1) {
+        candidateTarget = officerSumTarget;
+        candidateCollected = officerSumCollected;
+      }
+
+      if (candidateTarget > 0) {
+        const candidateScore =
+          titleBonus +
+          bottomBonus +
+          officersList.length * 10 +
+          (grandTotalRow ? 25 : 0);
+
+        if (
+          candidateScore > bestScore ||
+          (candidateScore === bestScore && candidateTarget > bestTarget)
+        ) {
+          bestScore = candidateScore;
+          bestTarget = candidateTarget;
+          bestCollected = candidateCollected;
+          bestVariance = candidateVariance;
+          bestPct = candidatePct;
+          bestTotalCount = grandTotalRow?.totCnt;
+          bestPaidCount = grandTotalRow?.paidCnt;
+          bestNotPaidCount = grandTotalRow?.npCnt;
+          bestNeededCount = grandTotalRow?.needCnt;
+          bestOfficers = officersList;
+        }
+      }
+
       if (tableFound) break;
     }
 
     // Strategy 2: Summary row itself is "Below 3 Collection" with headers 1..8 rows ABOVE
     if (!tableFound) {
       for (let hr = anchor.r - 1; hr >= Math.max(0, anchor.r - 8); hr--) {
-        const cols = detectHeaderCols(rows[hr] || [], anchor.c - 1, anchor.c + 16);
+        const cols = detectHeaderCols(rows[hr] || [], rows[hr + 1]);
         if (!cols || cols.targetCol === undefined || cols.collectedCol === undefined) continue;
 
         const drow = rows[anchor.r] || [];
         const tVal = parseAmountWithMillionHint(drow[cols.targetCol], cols.targetHint);
         const cVal = parseAmountWithMillionHint(drow[cols.collectedCol], cols.collectedHint);
-        if (tVal && tVal > 0 && cVal !== null && cVal >= 0 && tVal > bestTarget) {
-          bestTarget = tVal;
-          bestCollected = cVal;
-          bestVariance =
-            cols.varianceCol !== undefined
-              ? parseAmountWithMillionHint(drow[cols.varianceCol], cols.varianceHint)
-              : null;
-          bestPct = cols.pctCol !== undefined ? parsePctValue(drow[cols.pctCol]) : null;
-          const totCnt =
-            cols.totalCountCol !== undefined ? Math.round(parseNumeric(drow[cols.totalCountCol])) : 0;
-          const paidCnt =
-            cols.paidCountCol !== undefined ? Math.round(parseNumeric(drow[cols.paidCountCol])) : 0;
-          const npCnt =
-            cols.notPaidCountCol !== undefined
-              ? Math.round(parseNumeric(drow[cols.notPaidCountCol]))
-              : 0;
-          if (totCnt > 0) bestTotalCount = totCnt;
-          if (paidCnt > 0) bestPaidCount = paidCnt;
-          if (npCnt > 0) bestNotPaidCount = npCnt;
+        if (tVal && tVal > 0 && cVal !== null && cVal >= 0) {
+          const candidateScore = titleBonus + bottomBonus + 15;
+          if (
+            candidateScore > bestScore ||
+            (candidateScore === bestScore && tVal > bestTarget)
+          ) {
+            bestScore = candidateScore;
+            bestTarget = tVal;
+            bestCollected = cVal;
+            bestVariance =
+              cols.varianceCol !== undefined
+                ? parseAmountWithMillionHint(drow[cols.varianceCol], cols.varianceHint)
+                : null;
+            bestPct = cols.pctCol !== undefined ? parsePctValue(drow[cols.pctCol]) : null;
+            const totCnt =
+              cols.totalCountCol !== undefined
+                ? Math.round(parseNumeric(drow[cols.totalCountCol]))
+                : 0;
+            const paidCnt =
+              cols.paidCountCol !== undefined
+                ? Math.round(parseNumeric(drow[cols.paidCountCol]))
+                : 0;
+            const npCnt =
+              cols.notPaidCountCol !== undefined
+                ? Math.round(parseNumeric(drow[cols.notPaidCountCol]))
+                : 0;
+            if (totCnt > 0) bestTotalCount = totCnt;
+            if (paidCnt > 0) bestPaidCount = paidCnt;
+            if (npCnt > 0) bestNotPaidCount = npCnt;
+          }
         }
         break;
       }
@@ -1255,22 +1492,26 @@ function parseBmDashboardBelowThree(
     let kvTarget = 0;
     let kvCollected = 0;
     let kvPct: number | null = null;
-    for (let r = anchor.r; r <= Math.min(rows.length - 1, anchor.r + 9); r++) {
+    for (let r = anchor.r; r <= Math.min(rows.length - 1, anchor.r + 10); r++) {
       const row = rows[r] || [];
-      for (let c = Math.max(0, anchor.c - 1); c <= Math.min(row.length - 1, anchor.c + 10); c++) {
+      for (
+        let c = Math.max(0, anchor.c - 2);
+        c <= Math.min(row.length - 1, anchor.c + 12);
+        c++
+      ) {
         const lbl = String(row[c] ?? '').trim();
         if (!lbl || lbl.length > 60) continue;
         const ll = lbl.toLowerCase();
 
         const readAdjacentNum = (isPct = false): number | null => {
-          const candidates = [
-            row[c + 1],
-            row[c + 2],
-            rows[r + 1]?.[c],
-          ];
+          const candidates = [row[c + 1], row[c + 2], rows[r + 1]?.[c]];
           for (const cand of candidates) {
             if (cand === undefined || cand === null || cand === '') continue;
-            if (typeof cand === 'string' && /[a-z]{3,}/i.test(cand) && !/\b(rs|mn|million)\b/i.test(cand)) {
+            if (
+              typeof cand === 'string' &&
+              /[a-z]{3,}/i.test(cand) &&
+              !/\b(rs|lkr|mn|million)\b/i.test(cand)
+            ) {
               continue;
             }
             const parsed = isPct
@@ -1283,15 +1524,20 @@ function parseBmDashboardBelowThree(
 
         if (
           kvTarget === 0 &&
-          /(target|budget|monthly\s*due|due\s*amt|below\s*3\s*(target|due)|^due$)/i.test(ll) &&
-          !/%|coll|actual|ach|count|acct/i.test(ll)
+          /(target|budget|collectible|monthly\s*due|total\s*due|due\s*amt|below\s*3\s*(target|due)|^due$)/i.test(
+            ll,
+          ) &&
+          !/%|actual|ach|count|acct|variance|shortfall/i.test(ll) &&
+          !(/\b(collection|collected)\b/i.test(ll) && !/collectible/i.test(ll))
         ) {
           const v = readAdjacentNum(false);
           if (v && v > 0) kvTarget = v;
         } else if (
           kvCollected === 0 &&
-          /(collection|collected|actual|achieved|total\s*coll|cash\s*coll|below\s*3\s*coll)/i.test(ll) &&
-          !/%|target|due|budget|count|acct/i.test(ll)
+          /(collection|collected|actual|achieved|total\s*coll|cash\s*coll|below\s*3\s*coll)/i.test(
+            ll,
+          ) &&
+          !/collectible|%|target|budget|count|acct|variance|shortfall/i.test(ll)
         ) {
           const v = readAdjacentNum(false);
           if (v && v > 0) kvCollected = v;
@@ -1304,15 +1550,21 @@ function parseBmDashboardBelowThree(
         }
       }
     }
-    if (kvTarget > 0 && kvCollected > 0 && kvTarget > bestTarget) {
-      bestTarget = kvTarget;
-      bestCollected = kvCollected;
-      bestPct = kvPct;
+    if (kvTarget > 0 && kvCollected > 0) {
+      const candidateScore = titleBonus + bottomBonus + 10;
+      if (
+        candidateScore > bestScore ||
+        (candidateScore === bestScore && kvTarget > bestTarget)
+      ) {
+        bestScore = candidateScore;
+        bestTarget = kvTarget;
+        bestCollected = kvCollected;
+        bestPct = kvPct;
+      }
     }
   }
 
-  // If officer rows were extracted from BM Dashboard sheet but no Total row was matched, sum them!
-  const byOfficer = Array.from(officerMap.values());
+  const byOfficer = bestOfficers;
   if (bestTarget === 0 && byOfficer.length >= 2) {
     bestTarget = byOfficer.reduce((s, o) => s + o.targetAmount, 0);
     bestCollected = byOfficer.reduce((s, o) => s + o.collectedAmount, 0);

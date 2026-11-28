@@ -19,6 +19,7 @@ import {
   History,
   Landmark,
   Lock,
+  Menu,
   Moon,
   PieChart,
   RefreshCw,
@@ -43,6 +44,7 @@ import { ExecutiveOfficerHubPanel } from './components/ExecutiveOfficerHubPanel'
 import { FbIncentivePanel } from './components/FbIncentivePanel';
 import strategyHeroImg from './assets/images/finance_strategy_hero_1795684833730.jpg';
 import { KpiStrip } from './components/KpiStrip';
+import { MobileNavigationShell } from './components/MobileNavigationShell';
 import { NextMonthBorderlineCardsPanel } from './components/NextMonthBorderlineCardsPanel';
 import { OfficeTypeBreakdownPanel } from './components/OfficeTypeBreakdownPanel';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
@@ -1039,6 +1041,7 @@ export default function App() {
 
   const [adminToken, setAdminToken] = useState<string | null>(null);
   const [adminModalOpen, setAdminModalOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isAdmin = Boolean(adminToken);
 
   const [snapshotMode, setSnapshotMode] = useState<SnapshotMode>('off');
@@ -2415,25 +2418,25 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#f7f6f4] dark:bg-[#0f1115] text-zinc-900 dark:text-zinc-100">
-      {/* Sticky Commercial Credit Corporate Header */}
-      <header className="sticky top-0 z-30 h-16 bg-white/92 dark:bg-[#16181e]/92 backdrop-blur-xl border-b border-zinc-200/90 dark:border-zinc-800/90 px-4 sm:px-6 flex items-center justify-between gap-3 shrink-0 shadow-xs">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="relative flex items-center justify-center px-2 py-1.5 rounded-xl bg-white shadow-xs border border-zinc-200/90 dark:border-zinc-700 shrink-0">
+      {/* Sticky Commercial Credit Corporate Header (Compact on Mobile, Full Enterprise Bar on Web) */}
+      <header className="sticky top-0 z-30 min-h-14 md:h-16 pt-safe bg-white/94 dark:bg-[#16181e]/94 backdrop-blur-xl border-b border-zinc-200/90 dark:border-zinc-800/90 px-3 sm:px-5 md:px-6 flex items-center justify-between gap-2 sm:gap-3 shrink-0 shadow-xs">
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+          <div className="relative flex items-center justify-center px-1.5 sm:px-2 py-1 sm:py-1.5 rounded-xl bg-white shadow-xs border border-zinc-200/90 dark:border-zinc-700 shrink-0">
             <img
               src={COMPANY_LOGO_URL}
               onError={handleCompanyLogoError}
               referrerPolicy="no-referrer"
               alt="Commercial Credit Logo"
-              className="h-7 sm:h-8 w-auto object-contain"
+              className="h-6 sm:h-7 md:h-8 w-auto object-contain"
             />
           </div>
 
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2">
               <span className="font-display text-sm sm:text-base font-extrabold tracking-tight text-zinc-900 dark:text-white whitespace-nowrap">
                 WG PULSE
               </span>
-              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-red-50 text-red-800 dark:bg-red-950/70 dark:text-red-300 border border-red-200 dark:border-red-800/80">
+              <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-red-50 text-red-800 dark:bg-red-950/70 dark:text-red-300 border border-red-200 dark:border-red-800/80">
                 RECOVERY
               </span>
               <span aria-hidden="true" className="text-zinc-300 dark:text-zinc-700 hidden xl:inline">·</span>
@@ -2441,14 +2444,57 @@ export default function App() {
                 {breadcrumbLabel[activeNav]}
               </span>
             </div>
-            <span className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 tracking-wide truncate block">
+            {/* Mobile shows active section breadcrumb cleanly; desktop shows brand subtitle */}
+            <span className="md:hidden text-[11px] font-semibold text-red-700 dark:text-red-400 truncate block leading-tight">
+              {breadcrumbLabel[activeNav]}
+            </span>
+            <span className="hidden md:block text-[10px] font-medium text-zinc-500 dark:text-zinc-400 tracking-wide truncate">
               {t('brandSubtitle')} · {isAdmin ? t('adminMode') : t('viewOnlyMode')}
             </span>
           </div>
         </div>
 
-        {/* Right Zone (Single Bottom Floating Main Menu — Header holds Utility & Language Controls) */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0" data-snapshot-ignore="true">
+        {/* Mobile Compact Header Actions (3 ergonomic >=40px touch buttons) */}
+        <div className="flex md:hidden items-center gap-1.5 shrink-0" data-snapshot-ignore="true">
+          <button
+            type="button"
+            onClick={() => syncFromLiveCloud(false)}
+            disabled={isSyncingCloud}
+            aria-label="Refresh live cloud data"
+            className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 active:scale-95 transition-transform disabled:opacity-50"
+          >
+            <Cloud className={`w-4 h-4 text-emerald-600 ${isSyncingCloud ? 'animate-pulse' : ''}`} />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setAdminModalOpen(true)}
+            aria-label="Admin login and live sync"
+            className={`min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded-xl border active:scale-95 transition-transform ${
+              isAdmin
+                ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+                : 'border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-300'
+            }`}
+          >
+            {isAdmin ? (
+              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+            ) : (
+              <Lock className="w-4 h-4" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen(true)}
+            aria-label="Open menu, language and quick controls"
+            className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded-xl border border-red-200 dark:border-red-900/70 bg-red-50/80 dark:bg-red-950/40 text-red-700 dark:text-red-300 active:scale-95 transition-transform"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Desktop / Web Full Right Utility Zone */}
+        <div className="hidden md:flex items-center gap-1.5 lg:gap-2 shrink-0" data-snapshot-ignore="true">
           {/* Trilingual Switcher: English · සිංහල · தமிழ் */}
           <div
             role="group"
@@ -2484,7 +2530,7 @@ export default function App() {
               setSnapshotMode((prev) => (prev === 'pick' ? 'off' : 'pick'))
             }
             title="Select any section, card, or chart to Copy PNG / Download PNG / PDF / Excel / Share WhatsApp (Ctrl+Shift+S)"
-            className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
+            className={`inline-flex items-center gap-1.5 px-2.5 lg:px-3 py-2 text-xs font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
               snapshotMode === 'pick'
                 ? 'border-red-600 bg-red-700 text-white'
                 : 'border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800'
@@ -2497,7 +2543,7 @@ export default function App() {
                   : 'text-red-700 dark:text-red-400'
               }`}
             />
-            <span className="hidden md:inline">
+            <span className="hidden lg:inline">
               {snapshotMode === 'pick' ? t('pickingSection') : t('snapExport')}
             </span>
           </button>
@@ -2531,17 +2577,17 @@ export default function App() {
             onClick={() => syncFromLiveCloud(false)}
             disabled={isSyncingCloud}
             title="Fetch latest Admin-published data"
-            className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-medium rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 shadow-xs disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-2.5 lg:px-3 py-2 text-xs font-medium rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 shadow-xs disabled:opacity-50"
           >
             <Cloud className={`w-3.5 h-3.5 text-emerald-600 ${isSyncingCloud ? 'animate-pulse' : ''}`} />
             <span className="hidden xl:inline">{isSyncingCloud ? t('syncing') : t('refreshLive')}</span>
           </button>
 
           {isAdmin && (
-            <label className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-medium rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer transition-colors whitespace-nowrap shrink-0 shadow-xs">
+            <label className="inline-flex items-center gap-1.5 px-2.5 lg:px-3 py-2 text-xs font-medium rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer transition-colors whitespace-nowrap shrink-0 shadow-xs">
               <Upload className="w-3.5 h-3.5 text-red-700 dark:text-red-400" />
-              <span className="hidden md:inline">{t('uploadAers')}</span>
-              <span className="md:hidden">AERS</span>
+              <span className="hidden lg:inline">{t('uploadAers')}</span>
+              <span className="lg:hidden">AERS</span>
               <input
                 type="file"
                 accept=".xlsx,.xls,.csv"
@@ -2559,7 +2605,7 @@ export default function App() {
             type="button"
             onClick={() => setAdminModalOpen(true)}
             aria-label="Admin login and reset controls"
-            className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-medium rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
+            className={`inline-flex items-center gap-1.5 px-2.5 lg:px-3 py-2 text-xs font-medium rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
               isAdmin
                 ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
                 : 'border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800'
@@ -2568,12 +2614,12 @@ export default function App() {
             {isAdmin ? (
               <>
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="hidden sm:inline">{t('adminActive')}</span>
+                <span className="hidden lg:inline">{t('adminActive')}</span>
               </>
             ) : (
               <>
                 <Lock className="w-3.5 h-3.5 text-zinc-500" />
-                <span className="hidden sm:inline">{t('adminLogin')}</span>
+                <span className="hidden lg:inline">{t('adminLogin')}</span>
               </>
             )}
           </button>
@@ -2593,44 +2639,44 @@ export default function App() {
         </div>
       </header>
 
-      {/* Sub-Header Live Strategy Strip */}
-      <div className="bg-white/75 dark:bg-zinc-900/50 border-b border-zinc-200/80 dark:border-zinc-800/80 px-4 sm:px-6 py-2.5">
-        <div className="max-w-[1600px] mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-zinc-600 dark:text-zinc-400 tabular-nums">
-            <span className="inline-flex items-center gap-1.5 font-semibold text-red-700 dark:text-red-400">
+      {/* Sub-Header Live Strategy Strip (Single-Line Swipeable on Mobile, Full Toolbar on Web) */}
+      <div className="bg-white/75 dark:bg-zinc-900/50 border-b border-zinc-200/80 dark:border-zinc-800/80 px-3 sm:px-6 py-2">
+        <div className="max-w-[1600px] mx-auto flex items-center justify-between gap-3 text-[11px] sm:text-xs">
+          <div className="flex items-center gap-x-2.5 sm:gap-x-3 overflow-x-auto no-scrollbar whitespace-nowrap text-zinc-600 dark:text-zinc-400 tabular-nums py-0.5">
+            <span className="inline-flex items-center gap-1 font-semibold text-red-700 dark:text-red-400 shrink-0">
               <RefreshCw className="w-3 h-3 shrink-0" />
               {isAdmin ? t('adminMode') : t('viewOnlyMode')}
             </span>
             <span aria-hidden="true">·</span>
-            <span>
+            <span className="shrink-0">
               Snapshot:{' '}
               <span className="font-mono text-zinc-900 dark:text-zinc-200">
                 {aersMeta?.printedDateTime || '—'}
               </span>
             </span>
             <span aria-hidden="true">·</span>
-            <span>
+            <span className="shrink-0">
               Scope:{' '}
               <span className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">
-                {selectedOfficer === 'ALL' ? 'All Officers (Branch)' : selectedOfficer}
+                {selectedOfficer === 'ALL' ? 'All Officers' : selectedOfficer}
               </span>
             </span>
             <span aria-hidden="true">·</span>
-            <span>
+            <span className="shrink-0">
               {month30thLabel} Cutoff:{' '}
               <span className="font-mono font-semibold text-amber-700 dark:text-amber-400">
-                {daysTo30th} {daysTo30th === 1 ? 'day' : 'days'} left
+                {daysTo30th}d left
               </span>
             </span>
             <span aria-hidden="true">·</span>
-            <span>
-              90 Ratio (≤1.00):{' '}
+            <span className="shrink-0">
+              90 Ratio:{' '}
               <span className="font-mono font-semibold text-emerald-700 dark:text-emerald-400">
                 {aersAlertSummary.ratio90Pct.toFixed(1)}%
               </span>
             </span>
-            <span aria-hidden="true">·</span>
-            <span>
+            <span aria-hidden="true" className="hidden sm:inline">·</span>
+            <span className="hidden sm:inline shrink-0">
               AERS Indexed:{' '}
               <span className="font-mono text-zinc-900 dark:text-zinc-200">
                 {visibleAersRecords.length.toLocaleString()}
@@ -2638,7 +2684,7 @@ export default function App() {
             </span>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0" data-snapshot-ignore="true">
+          <div className="hidden md:flex items-center gap-2 shrink-0" data-snapshot-ignore="true">
             <button
               type="button"
               onClick={() => setHoverSnapEnabled((prev) => !prev)}
@@ -2723,24 +2769,24 @@ export default function App() {
       )}
 
       {/* Main Viewport */}
-      <main className="flex-1 p-4 sm:p-6 space-y-6 max-w-[1600px] w-full mx-auto">
+      <main className="flex-1 px-3 py-4 sm:p-6 space-y-5 sm:space-y-6 max-w-[1600px] w-full mx-auto">
         <motion.div
           key={activeNav}
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-          className="space-y-6"
+          className="space-y-5 sm:space-y-6"
         >
           {activeNav === 'overview' && (
             <>
               <section
                 aria-label="Recovery Strategy Summary"
-                className="bg-gradient-to-br from-zinc-900 via-[#1d1719] to-red-950 text-white border border-red-900/40 rounded-3xl p-6 sm:p-7 shadow-xl shadow-zinc-950/20 relative overflow-hidden"
+                className="bg-gradient-to-br from-zinc-900 via-[#1d1719] to-red-950 text-white border border-red-900/40 rounded-2xl sm:rounded-3xl p-4 sm:p-6 lg:p-7 shadow-xl shadow-zinc-950/20 relative overflow-hidden"
               >
                 <div className="absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r from-red-700 via-red-500 to-zinc-800 opacity-90" />
 
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 relative z-10">
-                  <div className="space-y-3.5 max-w-2xl">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5 lg:gap-6 relative z-10">
+                  <div className="space-y-3 sm:space-y-3.5 max-w-2xl">
                     <div className="flex items-center gap-2.5">
                       <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-white/95">
                         <img
@@ -2756,7 +2802,7 @@ export default function App() {
                       </span>
                     </div>
 
-                    <h1 className="font-display text-xl sm:text-2xl lg:text-3xl font-extrabold tracking-tight text-white leading-tight">
+                    <h1 className="font-display text-lg sm:text-2xl lg:text-3xl font-extrabold tracking-tight text-white leading-tight [text-wrap:balance]">
                       {t('heroTitle')}
                     </h1>
 
@@ -2764,7 +2810,7 @@ export default function App() {
                       {t('heroDesc')}
                     </p>
 
-                    <div className="grid grid-cols-3 gap-3 pt-1 tabular-nums max-w-xl">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3 pt-1 tabular-nums max-w-xl">
                       <div className="p-3 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md">
                         <div className="text-[11px] font-medium text-zinc-400">
                           {t('officeTypes')}
@@ -2776,39 +2822,39 @@ export default function App() {
 
                       <button
                         type="button"
-                        onClick={() => setActiveNav('borderline')}
-                        className="text-left p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 hover:border-amber-400/60 backdrop-blur-md transition-all group"
-                      >
-                        <div className="text-[11px] font-medium text-amber-300 flex items-center justify-between">
-                          <span>{t('nextMoBorderline')}</span>
-                          <span className="text-[9px] text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
-                        </div>
-                        <div className="mt-1 text-lg sm:text-xl font-bold font-mono text-amber-200">
-                          {strategySummary.borderlineCount}{' '}
-                          <span className="text-xs font-normal text-amber-300/80 block sm:inline">
-                            · {formatCompactRs(strategySummary.borderlineCapitalAtRisk)}
-                          </span>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
                         onClick={() => setActiveNav('worst')}
                         className="text-left p-3 rounded-2xl bg-red-500/15 border border-red-500/35 hover:border-red-400/70 backdrop-blur-md transition-all group"
                       >
                         <div className="text-[11px] font-medium text-red-300 flex items-center justify-between">
                           <span>{t('worstCase')}</span>
-                          <span className="text-[9px] text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+                          <span className="text-[9px] text-red-400 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">→</span>
                         </div>
                         <div className="mt-1 text-lg sm:text-xl font-bold font-mono text-red-200">
                           {strategySummary.worstCount}
                         </div>
                       </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveNav('borderline')}
+                        className="col-span-2 sm:col-span-1 text-left p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 hover:border-amber-400/60 backdrop-blur-md transition-all group"
+                      >
+                        <div className="text-[11px] font-medium text-amber-300 flex items-center justify-between">
+                          <span>{t('nextMoBorderline')}</span>
+                          <span className="text-[9px] text-amber-400 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">→</span>
+                        </div>
+                        <div className="mt-1 text-lg sm:text-xl font-bold font-mono text-amber-200">
+                          {strategySummary.borderlineCount}{' '}
+                          <span className="text-xs font-normal text-amber-300/85">
+                            · {formatCompactRs(strategySummary.borderlineCapitalAtRisk)}
+                          </span>
+                        </div>
+                      </button>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2.5 pt-2">
+                    <div className="flex flex-wrap items-center gap-2 pt-1.5">
                       {isAdmin ? (
-                        <label className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-red-600 text-white hover:bg-red-500 shadow-md cursor-pointer transition-all whitespace-nowrap">
+                        <label className="inline-flex items-center justify-center gap-1.5 min-h-[40px] px-3.5 sm:px-4 py-2 text-xs font-bold rounded-xl bg-red-600 text-white hover:bg-red-500 shadow-md cursor-pointer transition-all whitespace-nowrap">
                           <Upload className="w-3.5 h-3.5 stroke-[2.5]" />
                           {t('uploadDailyAers')}
                           <input
@@ -2826,7 +2872,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() => setAdminModalOpen(true)}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-red-200 transition-all whitespace-nowrap"
+                          className="inline-flex items-center justify-center gap-1.5 min-h-[40px] px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-red-200 transition-all whitespace-nowrap"
                         >
                           <Lock className="w-3.5 h-3.5" />
                           {t('adminLoginToUpload')}
@@ -2836,7 +2882,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setActiveNav('assign_user')}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white transition-all whitespace-nowrap"
+                        className="inline-flex items-center justify-center gap-1.5 min-h-[40px] px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white transition-all whitespace-nowrap"
                       >
                         <Briefcase className="w-3.5 h-3.5 text-red-300" />
                         {t('navAssignUser')}
@@ -2845,7 +2891,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setActiveNav('below_one')}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-emerald-200 transition-all whitespace-nowrap"
+                        className="inline-flex items-center justify-center gap-1.5 min-h-[40px] px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-emerald-200 transition-all whitespace-nowrap"
                       >
                         <Scale className="w-3.5 h-3.5 text-emerald-400" />
                         {t('belowOnePlan')}
@@ -2854,7 +2900,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setActiveNav('below_three')}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white transition-all whitespace-nowrap"
+                        className="inline-flex items-center justify-center gap-1.5 min-h-[40px] px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white transition-all whitespace-nowrap"
                       >
                         <Banknote className="w-3.5 h-3.5 text-emerald-300" />
                         {t('navBelowThree')}
@@ -2863,7 +2909,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setActiveNav('rewards')}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/30 text-amber-200 transition-all whitespace-nowrap"
+                        className="inline-flex items-center justify-center gap-1.5 min-h-[40px] px-3.5 py-2 text-xs font-semibold rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/30 text-amber-200 transition-all whitespace-nowrap"
                       >
                         <Trophy className="w-3.5 h-3.5 text-amber-300" />
                         {t('navRewards')}
@@ -2871,7 +2917,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-center shrink-0">
+                  <div className="hidden sm:flex items-center justify-center shrink-0">
                     <div className="w-full sm:w-72 h-44 rounded-2xl overflow-hidden border border-red-500/25 shadow-lg bg-zinc-950">
                       <img
                         src={strategyHeroImg}
@@ -3046,14 +3092,14 @@ export default function App() {
                 <div
                   role="tablist"
                   aria-label="Recovery Analytics Menu"
-                  className="inline-flex flex-wrap items-center gap-1 p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xs"
+                  className="inline-flex max-w-full overflow-x-auto no-scrollbar items-center gap-1 p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xs"
                 >
                   <button
                     type="button"
                     role="tab"
                     aria-selected={toolsSubTab === 'office_breakdown'}
                     onClick={() => setToolsSubTab('office_breakdown')}
-                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                    className={`inline-flex items-center gap-1.5 min-h-[38px] px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
                       toolsSubTab === 'office_breakdown'
                         ? 'bg-red-700 text-white'
                         : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800'
@@ -3067,7 +3113,7 @@ export default function App() {
                     role="tab"
                     aria-selected={toolsSubTab === 'bm_analytics'}
                     onClick={() => setToolsSubTab('bm_analytics')}
-                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                    className={`inline-flex items-center gap-1.5 min-h-[38px] px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
                       toolsSubTab === 'bm_analytics'
                         ? 'bg-red-700 text-white'
                         : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800'
@@ -3112,14 +3158,14 @@ export default function App() {
                 <div
                   role="tablist"
                   aria-label="Settings Menu"
-                  className="inline-flex flex-wrap items-center gap-1 p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xs"
+                  className="inline-flex max-w-full overflow-x-auto no-scrollbar items-center gap-1 p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xs"
                 >
                   <button
                     type="button"
                     role="tab"
                     aria-selected={settingsSubTab === 'lookup'}
                     onClick={() => setSettingsSubTab('lookup')}
-                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                    className={`inline-flex items-center gap-1.5 min-h-[38px] px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
                       settingsSubTab === 'lookup'
                         ? 'bg-red-700 text-white'
                         : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800'
@@ -3133,7 +3179,7 @@ export default function App() {
                     role="tab"
                     aria-selected={settingsSubTab === 'history'}
                     onClick={() => setSettingsSubTab('history')}
-                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                    className={`inline-flex items-center gap-1.5 min-h-[38px] px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
                       settingsSubTab === 'history'
                         ? 'bg-red-700 text-white'
                         : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800'
@@ -3147,7 +3193,7 @@ export default function App() {
                     role="tab"
                     aria-selected={settingsSubTab === 'backup'}
                     onClick={() => setSettingsSubTab('backup')}
-                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                    className={`inline-flex items-center gap-1.5 min-h-[38px] px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
                       settingsSubTab === 'backup'
                         ? 'bg-red-700 text-white'
                         : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800'
@@ -3207,7 +3253,7 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="mt-8 pb-28 px-4 sm:px-6 border-t border-zinc-200/90 dark:border-zinc-800/90 bg-white/80 dark:bg-zinc-900/60 backdrop-blur-md">
+      <footer className="mt-8 pb-24 md:pb-28 px-4 sm:px-6 border-t border-zinc-200/90 dark:border-zinc-800/90 bg-white/80 dark:bg-zinc-900/60 backdrop-blur-md">
         <div className="max-w-[1600px] mx-auto py-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 text-xs">
           <div className="flex items-center gap-3">
             <div className="px-2 py-1 rounded-lg bg-white border border-zinc-200 shadow-xs shrink-0">
@@ -3224,7 +3270,7 @@ export default function App() {
                 WG Pulse · {t('brandSubtitle')}
               </div>
               <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Admin Live Cloud Sync · Below 1 (90 Ratio) · XP Rewards · FB Incentive · Trilingual EN / සිංහල / தமிழ்
+                Mobile &amp; Web Live Sync · Below 1 (90 Ratio) · Below 3 Collection · XP Rewards · Trilingual EN / සිංහල / தமிழ்
               </div>
             </div>
           </div>
@@ -3281,11 +3327,53 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Bottom Floating Glass Menu Dock (Commercial Credit Crimson + Obsidian) */}
+      {/* Mobile Native Bottom Tab Bar + Slide-Up Modules & Quick Controls Sheet */}
+      <MobileNavigationShell
+        activeNav={activeNav}
+        onSelectNav={setActiveNav}
+        primaryNavItems={primaryNavItems}
+        secondaryNavItems={secondaryNavItems}
+        menuOpen={mobileMenuOpen}
+        onOpenMenu={() => setMobileMenuOpen(true)}
+        onCloseMenu={() => setMobileMenuOpen(false)}
+        lang={lang}
+        onChangeLang={setLang}
+        isDark={isDark}
+        onToggleDark={() => setIsDark((prev) => !prev)}
+        isAdmin={isAdmin}
+        isSyncingCloud={isSyncingCloud}
+        onSyncLive={() => syncFromLiveCloud(false)}
+        onOpenAdminModal={() => setAdminModalOpen(true)}
+        onUploadAersFile={handleUploadAersFile}
+        onStartSnapPick={() => setSnapshotMode('pick')}
+        borderlineBadge={
+          strategySummary.borderlineCount > 0
+            ? strategySummary.borderlineCount
+            : undefined
+        }
+        assignBadge={
+          staffAssignments.length > 0 ? staffAssignments.length : undefined
+        }
+        moreBadgeCount={urgentAlertsCount + worstCount}
+        labels={{
+          overview: t('navOverview'),
+          belowThree: t('navBelowThree'),
+          borderline: t('navBorderline'),
+          assign: t('navAssignUser'),
+          menu: 'Menu',
+          adminActive: t('adminActive'),
+          adminLogin: t('adminLogin'),
+          uploadAers: t('uploadAers'),
+          refreshLive: t('refreshLive'),
+          snapExport: t('snapExport'),
+        }}
+      />
+
+      {/* Desktop / Web Bottom Floating Glass Menu Dock (Commercial Credit Crimson + Obsidian) */}
       <nav
         aria-label="Primary Floating Glass Bottom Menu"
         data-snapshot-ignore="true"
-        className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 max-w-[96vw] overflow-x-auto bg-white/85 dark:bg-zinc-900/85 backdrop-blur-2xl border border-zinc-200/90 dark:border-zinc-700/80 shadow-[0_14px_40px_-10px_rgba(24,24,27,0.32)] rounded-2xl p-1.5"
+        className="hidden md:block fixed bottom-4 left-1/2 -translate-x-1/2 z-40 max-w-[96vw] overflow-x-auto no-scrollbar bg-white/88 dark:bg-zinc-900/88 backdrop-blur-2xl border border-zinc-200/90 dark:border-zinc-700/80 shadow-[0_14px_40px_-10px_rgba(24,24,27,0.32)] rounded-2xl p-1.5"
       >
         <div className="flex items-center gap-1">
           {primaryNavItems.map((item) => {
@@ -3296,7 +3384,7 @@ export default function App() {
                 type="button"
                 onClick={() => setActiveNav(item.id)}
                 title={item.label}
-                className={`relative flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 ${
+                className={`relative flex items-center gap-1.5 px-2.5 lg:px-3 py-2 text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 ${
                   active
                     ? 'text-white'
                     : 'text-zinc-700 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-100/80 dark:hover:bg-zinc-800/70'
@@ -3341,7 +3429,7 @@ export default function App() {
                 type="button"
                 onClick={() => setActiveNav(item.id)}
                 title={item.label}
-                className={`relative flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 ${
+                className={`relative flex items-center gap-1.5 px-2.5 lg:px-3 py-2 text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 ${
                   active
                     ? 'text-white'
                     : 'text-zinc-700 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-100/80 dark:hover:bg-zinc-800/70'
