@@ -105,6 +105,16 @@ const STORAGE_KEYS = {
 
 const EMPTY_STRING_SET = new Set<string>();
 
+const COMPANY_LOGO_URL = `${import.meta.env.BASE_URL}og-cc.png`;
+const COMPANY_LOGO_FALLBACK_URL =
+  'https://raw.githubusercontent.com/Sihnalahiru/WG-NPL-Pulse/main/public/og-cc.png';
+
+function handleCompanyLogoError(e: React.SyntheticEvent<HTMLImageElement>) {
+  if (e.currentTarget.src !== COMPANY_LOGO_FALLBACK_URL) {
+    e.currentTarget.src = COMPANY_LOGO_FALLBACK_URL;
+  }
+}
+
 interface DataShapeMismatch {
   source: string;
   field: string;
@@ -1960,7 +1970,9 @@ export default function App() {
         <div className="flex items-center gap-3 min-w-0">
           <div className="relative flex items-center justify-center px-2 py-1.5 rounded-xl bg-white shadow-xs border border-zinc-200/90 dark:border-zinc-700 shrink-0">
             <img
-              src="/assets/aistudio/og-cc_8ac5cf6e.png"
+              src={COMPANY_LOGO_URL}
+              onError={handleCompanyLogoError}
+              referrerPolicy="no-referrer"
               alt="Commercial Credit Logo"
               className="h-7 sm:h-8 w-auto object-contain"
             />
@@ -2282,7 +2294,9 @@ export default function App() {
                     <div className="flex items-center gap-2.5">
                       <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-white/95">
                         <img
-                          src="/assets/aistudio/og-cc_8ac5cf6e.png"
+                          src={COMPANY_LOGO_URL}
+                          onError={handleCompanyLogoError}
+                          referrerPolicy="no-referrer"
                           alt="Commercial Credit"
                           className="h-4 w-auto object-contain"
                         />
@@ -2714,7 +2728,9 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className="px-2 py-1 rounded-lg bg-white border border-zinc-200 shadow-xs shrink-0">
               <img
-                src="/assets/aistudio/og-cc_8ac5cf6e.png"
+                src={COMPANY_LOGO_URL}
+                onError={handleCompanyLogoError}
+                referrerPolicy="no-referrer"
                 alt="Commercial Credit"
                 className="h-6 w-auto object-contain"
               />

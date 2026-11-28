@@ -11,6 +11,10 @@ import {
 import { useOnlineStatus, usePWAInstall } from '../hooks/usePWAInstall';
 import { useLanguage } from '../contexts/LanguageContext';
 
+const COMPANY_LOGO_URL = `${import.meta.env.BASE_URL}og-cc.png`;
+const COMPANY_LOGO_FALLBACK_URL =
+  'https://raw.githubusercontent.com/Sihnalahiru/WG-NPL-Pulse/main/public/og-cc.png';
+
 interface PWAInstallButtonProps {
   compact?: boolean;
 }
@@ -79,7 +83,13 @@ export function PWAInstallButton({ compact = false }: PWAInstallButtonProps) {
               <div className="flex items-center gap-2.5">
                 <div className="p-1.5 rounded-xl bg-white border border-red-200 shadow-xs">
                   <img
-                    src="/assets/aistudio/og-cc_8ac5cf6e.png"
+                    src={COMPANY_LOGO_URL}
+                    onError={(e) => {
+                      if (e.currentTarget.src !== COMPANY_LOGO_FALLBACK_URL) {
+                        e.currentTarget.src = COMPANY_LOGO_FALLBACK_URL;
+                      }
+                    }}
+                    referrerPolicy="no-referrer"
                     alt="Commercial Credit"
                     className="w-8 h-5 object-contain"
                   />

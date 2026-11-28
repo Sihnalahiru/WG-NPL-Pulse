@@ -9,9 +9,9 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="WG Pulse" />
     <meta name="application-name" content="WG Pulse" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
-    <link rel="icon" type="image/png" sizes="512x512" href="/pwa-512x512.png" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./pwa-192x192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="./pwa-512x512.png" />
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
@@ -25,8 +25,10 @@
       property="og:description"
       content="WG Pulse: Commercial Credit leasing and finance recovery intelligence platform for AERS master lookup, DPD 91 borderline control, Below 1 (90 Ratio) planning, XP rewards, and FB Incentive tracking."
     />
+    <meta property="og:image" content="./og-cc.png" />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="./og-cc.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -66,13 +68,36 @@
           root.append(panel);
         };
 
+        const isBrowserExtensionError = (source, stack, message) => {
+          const text = `${source || ''} ${stack || ''} ${message || ''}`;
+          return (
+            /(?:chrome|moz|safari|safari-web|edge)-extension:\/\//i.test(text) ||
+            /Cannot set property fetch of #<Window>/i.test(text)
+          );
+        };
+
         window.addEventListener('error', (event) => {
+          const source =
+            event.filename ||
+            (event.target && event.target instanceof HTMLScriptElement ? event.target.src : '');
+          const stack = event.error && event.error.stack ? String(event.error.stack) : '';
+          if (isBrowserExtensionError(source, stack, event.message)) {
+            event.preventDefault();
+            return;
+          }
           if (event.error || event.target instanceof HTMLScriptElement) {
             showStartupError(event.message || 'A JavaScript file failed to load.');
           }
         });
         window.addEventListener('unhandledrejection', (event) => {
-          showStartupError(event.reason instanceof Error ? event.reason.message : event.reason);
+          const reason = event.reason;
+          const stack = reason instanceof Error && reason.stack ? reason.stack : '';
+          const message = reason instanceof Error ? reason.message : String(reason || '');
+          if (isBrowserExtensionError('', stack, message)) {
+            event.preventDefault();
+            return;
+          }
+          showStartupError(message);
         });
       })();
     </script>

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowDownRight,
@@ -11,6 +11,8 @@ import {
   Layers,
   PhoneCall,
   Search,
+  Target,
+  TrendingDown,
   TrendingUp,
   Upload,
   Users,
@@ -26,6 +28,7 @@ import {
   Line,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -55,6 +58,11 @@ interface BelowThreeCollectionPanelProps {
   onUploadWorkbook?: (file: File) => void;
 }
 
+type TargetPresetMode = 'target_20m' | 'target_25m' | 'target_32m' | 'full_due' | 'custom';
+
+const TARGET_MODE_STORAGE_KEY = 'wg_below3_target_mode_v1';
+const CUSTOM_TARGET_M_STORAGE_KEY = 'wg_below3_custom_target_m_v1';
+
 export function BelowThreeCollectionPanel({
   aersRecords,
   aersMeta,
@@ -64,12 +72,61 @@ export function BelowThreeCollectionPanel({
   onUploadWorkbook,
 }: BelowThreeCollectionPanelProps) {
   const [selectedOfficer, setSelectedOfficer] = useState<string>('ALL');
-  const [chartMode, setChartMode] = useState<'amount' | 'contracts'>('amount');
+  const [chartMode, setChartMode] = useState<'amount' | 'variance' | 'contracts'>('amount');
   const [statusFilter, setStatusFilter] = useState<'all' | 'not_paid' | 'partial' | 'paid'>('not_paid');
   const [ageBandFilter, setAgeBandFilter] = useState<'all' | 'below1' | 'age1to2' | 'age2to3'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [visibleLimit, setVisibleLimit] = useState(30);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [targetMode, setTargetMode] = useState<TargetPresetMode>(() => {
+    try {
+      const saved = window.localStorage.getItem(TARGET_MODE_STORAGE_KEY);
+      if (
+        saved === 'target_20m' ||
+        saved === 'target_25m' ||
+        saved === 'target_32m' ||
+        saved === 'full_due' ||
+        saved === 'custom'
+      ) {
+        return saved;
+      }
+    } catch {
+      // ignore storage access issues
+    }
+    return 'target_20m';
+  });
+
+  const [customTargetM, setCustomTargetM] = useState<string>(() => {
+    try {
+      const saved = window.localStorage.getItem(CUSTOM_TARGET_M_STORAGE_KEY);
+      if (saved && Number.isFinite(Number(saved)) && Number(saved) >= 1) {
+        return saved;
+      }
+    } catch {
+      // ignore
+    }
+    return '22';
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(TARGET_MODE_STORAGE_KEY, targetMode);
+    } catch {
+      // ignore
+    }
+  }, [targetMode]);
+
+  useEffect(() => {
+    const parsed = Number(customTargetM);
+    if (Number.isFinite(parsed) && parsed >= 1) {
+      try {
+        window.localStorage.setItem(CUSTOM_TARGET_M_STORAGE_KEY, customTargetM);
+      } catch {
+        // ignore
+      }
+    }
+  }, [customTargetM]);
 
   const bm = aersMeta?.bmBranchSnapshot;
 
@@ -86,11 +143,125 @@ export function BelowThreeCollectionPanel({
   const isFromBmDashboardSheet = snapshot.source === 'bm_dashboard_sheet';
   const isBmReconciledSnapshot = snapshot.source === 'bm_reconciled_snapshot';
 
+  // Active Monthly Target benchmark (Rs. 20M+ floor, 25M, 32M BM Plan, Full Due, or Custom)
+  const activeBranchTarget = useMemo(() => {
+    if (targetMode === 'target_20m') {
+      return { amount: 20_000_000, label: 'Rs. 20M Monthly Target', shortLabel: '20M Target' };
+    }
+    if (targetMode === 'target_25m') {
+      return { amount: 25_000_000, label: 'Rs. 25M Stretch Target', shortLabel: '25M Target' };
+    }
+    if (targetMode === 'target_32m') {
+      return { amount: 32_000_000, label: 'Rs. 32M BM Plan Target', shortLabel: '32M Target' };
+    }
+    if (targetMode === 'custom') {
+      const m = Math.max(1, Number(customTargetM) || 20);
+      return {
+        amount: Math.round(m * 1_000_000),
+        label: `Rs. ${m.toFixed(m % 1 === 0 ? 0 : 1)}M Custom Target`,
+        shortLabel: `${m.toFixed(m % 1 === 0 ? 0 : 1)}M Target`,
+      };
+    }
+    return {
+      amount: snapshot.dueAmount,
+      label: isFromBmDashboardSheet ? 'BM Sheet Below-3 Target' : 'Full Monthly Due Budget',
+      shortLabel: isFromBmDashboardSheet ? 'BM Target' : 'Full Due',
+    };
+  }, [targetMode, customTargetM, snapshot.dueAmount, isFromBmDashboardSheet]);
+
+  // Officer-wise target allocation, variance vs. target, and visual performance tiers
+  const evaluatedOfficers = useMemo(() => {
+    const totalDue = snapshot.dueAmount > 0
+      ? snapshot.dueAmount
+      : snapshot.byOfficer.reduce((s, o) => s + o.dueAmount, 0);
+    const officerCount = Math.max(1, snapshot.byOfficer.length);
+
+    return snapshot.byOfficer
+      .map((o) => {
+        const portfolioShare = totalDue > 0 ? o.dueAmount / totalDue : 1 / officerCount;
+        const targetAmount =
+          targetMode === 'full_due'
+            ? o.dueAmount
+            : Math.round(activeBranchTarget.amount * portfolioShare);
+        const targetVariance = Math.round(o.collectedAmount - targetAmount);
+        const targetAchPct =
+          targetAmount > 0
+            ? Math.round((o.collectedAmount / targetAmount) * 1000) / 10
+            : 0;
+        const contributionTo20MPct =
+          Math.round((o.collectedAmount / 20_000_000) * 1000) / 10;
+
+        const avgDue =
+          o.avgDuePerUnpaid > 0
+            ? o.avgDuePerUnpaid
+            : o.totalCount > 0
+              ? o.dueAmount / o.totalCount
+              : 0;
+        const targetShortfall = Math.max(0, -targetVariance);
+        const contractsNeededForTarget =
+          targetMode === 'full_due'
+            ? o.contractsNeededAgainstDue
+            : targetShortfall <= 0
+              ? 0
+              : avgDue > 0
+                ? Math.min(
+                    Math.max(o.notPaidCount + o.partialPaidCount, 1),
+                    Math.ceil(targetShortfall / avgDue),
+                  )
+                : o.unpaidWithDueCount;
+
+        const perfTier: 'exceeded' | 'near' | 'behind' =
+          targetAchPct >= 100 ? 'exceeded' : targetAchPct >= 85 ? 'near' : 'behind';
+
+        return {
+          ...o,
+          portfolioSharePct: Math.round(portfolioShare * 1000) / 10,
+          targetAmount,
+          targetVariance,
+          targetAchPct,
+          contributionTo20MPct,
+          contractsNeededForTarget,
+          perfTier,
+        };
+      })
+      .sort((a, b) => a.targetVariance - b.targetVariance);
+  }, [snapshot.byOfficer, snapshot.dueAmount, targetMode, activeBranchTarget.amount]);
+
+  const branchTargetStats = useMemo(() => {
+    const targetAmount = activeBranchTarget.amount;
+    const collectedAmount = snapshot.collectedAmount;
+    const targetVariance = Math.round(collectedAmount - targetAmount);
+    const targetAchPct =
+      targetAmount > 0 ? Math.round((collectedAmount / targetAmount) * 1000) / 10 : 0;
+    const contractsNeededForTarget = evaluatedOfficers.reduce(
+      (s, o) => s + o.contractsNeededForTarget,
+      0,
+    );
+    const exceededCount = evaluatedOfficers.filter((o) => o.perfTier === 'exceeded').length;
+    const nearCount = evaluatedOfficers.filter((o) => o.perfTier === 'near').length;
+    const behindCount = evaluatedOfficers.filter((o) => o.perfTier === 'behind').length;
+    const surplusVs20M = Math.round(collectedAmount - 20_000_000);
+    const achVs20MPct = Math.round((collectedAmount / 20_000_000) * 1000) / 10;
+
+    return {
+      targetAmount,
+      collectedAmount,
+      targetVariance,
+      targetAchPct,
+      contractsNeededForTarget,
+      exceededCount,
+      nearCount,
+      behindCount,
+      surplusVs20M,
+      achVs20MPct,
+    };
+  }, [activeBranchTarget.amount, snapshot.collectedAmount, evaluatedOfficers]);
+
   // Scoped metrics when an individual officer is selected vs Branch Total
   const activeOfficerRow = useMemo(() => {
     if (selectedOfficer === 'ALL') return null;
-    return snapshot.byOfficer.find((o) => o.officer === selectedOfficer) ?? null;
-  }, [snapshot, selectedOfficer]);
+    return evaluatedOfficers.find((o) => o.officer === selectedOfficer) ?? null;
+  }, [evaluatedOfficers, selectedOfficer]);
 
   const activeTotals = useMemo(() => {
     if (activeOfficerRow) {
@@ -103,10 +274,15 @@ export function BelowThreeCollectionPanel({
         partialPaidCount: activeOfficerRow.partialPaidCount,
         unpaidWithDueCount: activeOfficerRow.unpaidWithDueCount,
         contractsNeededAgainstDue: activeOfficerRow.contractsNeededAgainstDue,
+        contractsNeededForTarget: activeOfficerRow.contractsNeededForTarget,
         dueAmount: activeOfficerRow.dueAmount,
+        targetAmount: activeOfficerRow.targetAmount,
         collectedAmount: activeOfficerRow.collectedAmount,
-        varianceAmount: activeOfficerRow.varianceAmount,
-        collectionPct: activeOfficerRow.collectionPct,
+        varianceAmount: activeOfficerRow.targetVariance,
+        dueVarianceAmount: activeOfficerRow.varianceAmount,
+        collectionPct: activeOfficerRow.targetAchPct,
+        dueCollectionPct: activeOfficerRow.collectionPct,
+        perfTier: activeOfficerRow.perfTier,
       };
     }
     return {
@@ -118,26 +294,38 @@ export function BelowThreeCollectionPanel({
       partialPaidCount: snapshot.partialPaidCount,
       unpaidWithDueCount: snapshot.unpaidWithDueCount,
       contractsNeededAgainstDue: snapshot.contractsNeededAgainstDue,
+      contractsNeededForTarget: branchTargetStats.contractsNeededForTarget,
       dueAmount: snapshot.dueAmount,
+      targetAmount: branchTargetStats.targetAmount,
       collectedAmount: snapshot.collectedAmount,
-      varianceAmount: snapshot.varianceAmount,
-      collectionPct: snapshot.collectionPct,
+      varianceAmount: branchTargetStats.targetVariance,
+      dueVarianceAmount: snapshot.varianceAmount,
+      collectionPct: branchTargetStats.targetAchPct,
+      dueCollectionPct: snapshot.collectionPct,
+      perfTier:
+        branchTargetStats.targetAchPct >= 100
+          ? ('exceeded' as const)
+          : branchTargetStats.targetAchPct >= 85
+            ? ('near' as const)
+            : ('behind' as const),
     };
-  }, [activeOfficerRow, snapshot]);
+  }, [activeOfficerRow, snapshot, branchTargetStats]);
 
   // Chart data per officer (use Rs. Millions for clean branch-scale readability)
   const officerChartData = useMemo(() => {
-    return snapshot.byOfficer.map((o) => ({
+    return evaluatedOfficers.map((o) => ({
       officer: o.officer,
+      targetM: Number((o.targetAmount / 1_000_000).toFixed(2)),
       dueM: Number((o.dueAmount / 1_000_000).toFixed(2)),
       collectedM: Number((o.collectedAmount / 1_000_000).toFixed(2)),
-      varianceM: Number((o.varianceAmount / 1_000_000).toFixed(2)),
-      collectionPct: o.collectionPct,
+      varianceM: Number((o.targetVariance / 1_000_000).toFixed(2)),
+      collectionPct: o.targetAchPct,
       paidCount: o.paidCount,
       notPaidCount: o.notPaidCount,
-      needed: o.contractsNeededAgainstDue,
+      needed: o.contractsNeededForTarget,
+      perfTier: o.perfTier,
     }));
-  }, [snapshot.byOfficer]);
+  }, [evaluatedOfficers]);
 
   // Paid vs Not Paid Donut Data
   const paymentSplitPie = useMemo(() => {
@@ -204,39 +392,48 @@ export function BelowThreeCollectionPanel({
           </div>
 
           <div className="flex flex-wrap items-center gap-3 shrink-0 tabular-nums">
-            <div className="px-4 py-3 rounded-xl bg-white/10 border border-white/15 backdrop-blur-md min-w-[165px]">
-              <div className="text-[11px] text-zinc-300">Paid This Month</div>
+            <div className="px-4 py-3 rounded-xl bg-white/10 border border-white/15 backdrop-blur-md min-w-[175px]">
+              <div className="text-[11px] text-zinc-300">20M+ Monthly Target</div>
               <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-xl font-bold font-mono text-emerald-300">
-                  {activeTotals.paidCount.toLocaleString()}
+                <span
+                  className={`text-xl font-bold font-mono ${
+                    branchTargetStats.surplusVs20M >= 0 ? 'text-emerald-300' : 'text-red-300'
+                  }`}
+                >
+                  {branchTargetStats.achVs20MPct.toFixed(1)}%
                 </span>
-                <span className="text-xs font-mono text-emerald-200/90">
-                  ({activeTotals.paidRatioPct.toFixed(1)}%)
+                <span className="text-[11px] font-mono text-zinc-200">
+                  {branchTargetStats.surplusVs20M >= 0 ? 'Exceeded' : 'Shortfall'}
                 </span>
               </div>
-              <div className="text-[10px] text-red-300 font-mono mt-0.5">
-                {activeTotals.notPaidCount.toLocaleString()} Not Paid
+              <div
+                className={`text-[10px] font-mono mt-0.5 ${
+                  branchTargetStats.surplusVs20M >= 0 ? 'text-emerald-300' : 'text-red-300'
+                }`}
+              >
+                {branchTargetStats.surplusVs20M >= 0 ? '+' : ''}
+                {formatCompactRs(branchTargetStats.surplusVs20M)} vs 20M
               </div>
             </div>
 
             <div className="px-4 py-3 rounded-xl bg-white/10 border border-white/15 backdrop-blur-md min-w-[185px]">
-              <div className="text-[11px] text-zinc-300">Contracts Needed vs Due</div>
+              <div className="text-[11px] text-zinc-300">
+                Variance ({activeBranchTarget.shortLabel})
+              </div>
               <div className="mt-1 flex items-baseline gap-2">
                 <span
                   className={`text-xl font-bold font-mono ${
-                    activeTotals.contractsNeededAgainstDue === 0
-                      ? 'text-emerald-300'
-                      : 'text-amber-300'
+                    varianceIsPositive ? 'text-emerald-300' : 'text-amber-300'
                   }`}
                 >
-                  {activeTotals.contractsNeededAgainstDue === 0
-                    ? '✓ Covered'
-                    : `${activeTotals.contractsNeededAgainstDue.toLocaleString()} more`}
+                  {varianceIsPositive ? '+' : ''}
+                  {formatCompactRs(activeTotals.varianceAmount)}
                 </span>
               </div>
               <div className="text-[10px] text-zinc-300 font-mono mt-0.5">
-                Variance: {varianceIsPositive ? '+' : ''}
-                {formatCompactRs(activeTotals.varianceAmount)}
+                {activeTotals.contractsNeededForTarget === 0
+                  ? '✓ Target achieved'
+                  : `${activeTotals.contractsNeededForTarget.toLocaleString()} contracts needed`}
               </div>
             </div>
           </div>
@@ -315,6 +512,174 @@ export function BelowThreeCollectionPanel({
         />
       )}
 
+      {/* Interactive Monthly Target Benchmark (20M+ Floor to Full Due) & Milestone Tracker */}
+      <section
+        aria-label="Monthly Target Benchmark and Variance Progress"
+        className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5 space-y-4 tabular-nums"
+      >
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Target className="w-4 h-4 text-red-700 dark:text-red-400 shrink-0" />
+              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                Monthly Target Benchmark &amp; Variance Tracker (20M+ Performance)
+              </h3>
+            </div>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+              Compare actual Below-3 collection against the Rs. 20M+ monthly floor, 32M branch plan, or full monthly due budget with pro-rata officer targets.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              role="group"
+              aria-label="Select Monthly Target Benchmark"
+              className="inline-flex flex-wrap items-center gap-1 p-1 rounded-lg bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800"
+            >
+              {(
+                [
+                  { id: 'target_20m', label: '20M Target' },
+                  { id: 'target_25m', label: '25M Stretch' },
+                  { id: 'target_32m', label: '32M Plan' },
+                  { id: 'full_due', label: isFromBmDashboardSheet ? 'BM Sheet' : 'Full Due' },
+                  { id: 'custom', label: 'Custom' },
+                ] as const
+              ).map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => setTargetMode(preset.id)}
+                  className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    targetMode === preset.id
+                      ? 'bg-red-700 text-white shadow-xs'
+                      : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            {targetMode === 'custom' && (
+              <div className="inline-flex items-center gap-1.5 text-xs">
+                <label htmlFor="custom-target-m" className="text-zinc-500 dark:text-zinc-400 font-medium whitespace-nowrap">
+                  Rs.
+                </label>
+                <input
+                  id="custom-target-m"
+                  type="number"
+                  min={1}
+                  max={200}
+                  step={0.5}
+                  value={customTargetM}
+                  onChange={(e) => setCustomTargetM(e.target.value)}
+                  className="w-20 px-2 py-1 text-xs font-mono font-bold rounded-lg border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-red-600"
+                />
+                <span className="text-zinc-500 dark:text-zinc-400 font-mono">M</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Visual Milestone Gauge */}
+        {(() => {
+          const maxScale = Math.max(
+            35_000_000,
+            snapshot.dueAmount,
+            activeBranchTarget.amount,
+            snapshot.collectedAmount * 1.05,
+          );
+          const collectedPctBar = Math.min(100, (snapshot.collectedAmount / maxScale) * 100);
+          const m20Pos = Math.min(98, (20_000_000 / maxScale) * 100);
+          const m32Pos = Math.min(98, (32_000_000 / maxScale) * 100);
+          const activeTargetPos = Math.min(99, (activeBranchTarget.amount / maxScale) * 100);
+
+          return (
+            <div className="space-y-2.5 pt-1">
+              <div className="relative h-4 w-full rounded-lg bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 overflow-visible">
+                <div
+                  className={`h-full rounded-lg transition-all duration-300 ${
+                    branchTargetStats.targetAchPct >= 100
+                      ? 'bg-emerald-600'
+                      : branchTargetStats.targetAchPct >= 85
+                        ? 'bg-amber-500'
+                        : 'bg-red-700'
+                  }`}
+                  style={{ width: `${collectedPctBar}%` }}
+                />
+
+                {/* 20M Milestone Tick */}
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-zinc-900/70 dark:bg-white/70"
+                  style={{ left: `${m20Pos}%` }}
+                  title="Rs. 20M Monthly Target Floor"
+                />
+                {/* 32M Milestone Tick */}
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-zinc-500/70 dark:bg-zinc-400/70"
+                  style={{ left: `${m32Pos}%` }}
+                  title="Rs. 32M BM Plan Benchmark"
+                />
+                {/* Active Selected Target Pin */}
+                <div
+                  className="absolute -top-1 -bottom-1 w-1 rounded-full bg-red-600 dark:bg-red-400 ring-2 ring-white dark:ring-zinc-900"
+                  style={{ left: `${activeTargetPos}%` }}
+                  title={`${activeBranchTarget.label}: ${formatCompactRs(activeBranchTarget.amount)}`}
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-zinc-600 dark:text-zinc-400">
+                  <span>
+                    Actual:{' '}
+                    <strong className="font-mono text-zinc-900 dark:text-zinc-100">
+                      {formatCompactRs(snapshot.collectedAmount)}
+                    </strong>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    Selected ({activeBranchTarget.shortLabel}):{' '}
+                    <strong className="font-mono text-zinc-900 dark:text-zinc-100">
+                      {formatCompactRs(branchTargetStats.targetAmount)}
+                    </strong>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span
+                    className={`font-mono font-bold inline-flex items-center gap-0.5 ${
+                      branchTargetStats.targetVariance >= 0
+                        ? 'text-emerald-700 dark:text-emerald-400'
+                        : 'text-red-700 dark:text-red-400'
+                    }`}
+                  >
+                    {branchTargetStats.targetVariance >= 0 ? (
+                      <ArrowUpRight className="w-3.5 h-3.5" />
+                    ) : (
+                      <ArrowDownRight className="w-3.5 h-3.5" />
+                    )}
+                    {branchTargetStats.targetVariance >= 0 ? '+' : ''}
+                    {formatCompactRs(branchTargetStats.targetVariance)} ({branchTargetStats.targetAchPct.toFixed(1)}%)
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-medium">
+                  <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                    {branchTargetStats.exceededCount} Exceeded (≥100%)
+                  </span>
+                  <span aria-hidden="true" className="text-zinc-400">·</span>
+                  <span className="text-amber-700 dark:text-amber-400 font-semibold">
+                    {branchTargetStats.nearCount} Near (85–99%)
+                  </span>
+                  <span aria-hidden="true" className="text-zinc-400">·</span>
+                  <span className="text-red-700 dark:text-red-400 font-semibold">
+                    {branchTargetStats.behindCount} Below (&lt;85%)
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </section>
+
       {/* 4 Executive KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 tabular-nums">
         {/* Card 1: Paid vs Not Paid Contracts */}
@@ -339,22 +704,18 @@ export function BelowThreeCollectionPanel({
           </div>
           <div className="mt-2 flex items-center justify-between text-[11px] font-mono">
             <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
-              ✓ {activeTotals.paidCount.toLocaleString()} Paid
+              {activeTotals.paidCount.toLocaleString()} Paid
             </span>
             <span className="text-red-700 dark:text-red-400 font-semibold">
-              ✗ {activeTotals.notPaidCount.toLocaleString()} Not Paid
+              {activeTotals.notPaidCount.toLocaleString()} Not Paid
             </span>
           </div>
         </div>
 
-        {/* Card 2: Monthly Target / Due vs Collected */}
+        {/* Card 2: Actual Collection vs Selected Target */}
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5">
           <div className="flex items-center justify-between gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-            <span>
-              {isFromBmDashboardSheet
-                ? 'BM Sheet Below-3 Coll vs. Target'
-                : 'Below-3 Collection vs. Monthly Due'}
-            </span>
+            <span>Actual vs. {activeBranchTarget.shortLabel}</span>
             <TrendingUp className="w-4 h-4 text-red-700 dark:text-red-400 shrink-0" />
           </div>
           <div className="mt-2 flex items-baseline gap-2">
@@ -370,7 +731,7 @@ export function BelowThreeCollectionPanel({
               className={`h-full rounded-full transition-all ${
                 activeTotals.collectionPct >= 100
                   ? 'bg-emerald-600'
-                  : activeTotals.collectionPct >= 75
+                  : activeTotals.collectionPct >= 85
                     ? 'bg-amber-500'
                     : 'bg-red-700'
               }`}
@@ -378,15 +739,18 @@ export function BelowThreeCollectionPanel({
             />
           </div>
           <div className="mt-2 text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
-            {isFromBmDashboardSheet ? 'BM Target:' : 'Monthly Due:'}{' '}
-            <strong className="text-zinc-800 dark:text-zinc-200">{formatCompactRs(activeTotals.dueAmount)}</strong>
+            Target:{' '}
+            <strong className="text-zinc-800 dark:text-zinc-200">
+              {formatCompactRs(activeTotals.targetAmount)}
+            </strong>{' '}
+            · Full Due: {formatCompactRs(activeTotals.dueAmount)}
           </div>
         </div>
 
-        {/* Card 3: Collection Variance (Rs.) */}
+        {/* Card 3: Actual vs Target Variance (Rs.) */}
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5">
           <div className="flex items-center justify-between gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-            <span>Due Collection Variance (Rs.)</span>
+            <span>Target Variance ({activeBranchTarget.shortLabel})</span>
             {varianceIsPositive ? (
               <ArrowUpRight className="w-4 h-4 text-emerald-600 shrink-0" />
             ) : (
@@ -406,41 +770,51 @@ export function BelowThreeCollectionPanel({
           <div className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">
             {varianceIsPositive ? (
               <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
-                Surplus collected above monthly Due
+                Surplus above {activeBranchTarget.shortLabel} (+{(activeTotals.collectionPct - 100).toFixed(1)}%)
               </span>
             ) : (
               <span>
-                Shortfall remaining against Due ({(100 - activeTotals.collectionPct).toFixed(1)}% gap)
+                Shortfall vs {activeBranchTarget.shortLabel} ({Math.max(0, 100 - activeTotals.collectionPct).toFixed(1)}% gap)
               </span>
             )}
           </div>
         </div>
 
-        {/* Card 4: Contracts Needed Against Due */}
+        {/* Card 4: Contracts Needed Against Target */}
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-5">
           <div className="flex items-center justify-between gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-            <span>Contracts Needing Payment vs. Due</span>
+            <span>Contracts Needed vs. {activeBranchTarget.shortLabel}</span>
             <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span
               className={`text-2xl font-bold font-mono ${
-                activeTotals.contractsNeededAgainstDue === 0
+                activeTotals.contractsNeededForTarget === 0
                   ? 'text-emerald-700 dark:text-emerald-400'
                   : 'text-amber-700 dark:text-amber-400'
               }`}
             >
-              {activeTotals.contractsNeededAgainstDue.toLocaleString()}
+              {activeTotals.contractsNeededForTarget.toLocaleString()}
             </span>
             <span className="text-xs text-zinc-500 dark:text-zinc-400">
-              {activeTotals.contractsNeededAgainstDue === 0
-                ? 'Due achieved!'
-                : 'contracts to cover Due'}
+              {activeTotals.contractsNeededForTarget === 0
+                ? 'Target achieved'
+                : 'contracts to cover gap'}
             </span>
           </div>
           <div className="mt-2 flex items-center justify-between text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
-            <span>Unpaid w/ Due: <strong className="text-red-700 dark:text-red-400">{activeTotals.unpaidWithDueCount}</strong></span>
-            <span>Partial: <strong className="text-amber-700 dark:text-amber-400">{activeTotals.partialPaidCount}</strong></span>
+            <span>
+              Full Due Need:{' '}
+              <strong className="text-red-700 dark:text-red-400">
+                {activeTotals.contractsNeededAgainstDue}
+              </strong>
+            </span>
+            <span>
+              Partial:{' '}
+              <strong className="text-amber-700 dark:text-amber-400">
+                {activeTotals.partialPaidCount}
+              </strong>
+            </span>
           </div>
         </div>
       </div>
@@ -456,8 +830,10 @@ export function BelowThreeCollectionPanel({
               </h3>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
                 {chartMode === 'amount'
-                  ? 'Monthly Due / Target vs. Collected (Rs. Millions) and Collection % achievement per officer'
-                  : 'Paid vs. Not Paid Below-3 contracts this month per officer'}
+                  ? `Officer Target Share (${activeBranchTarget.shortLabel}) vs. Actual Collected (Rs. Millions) & Achievement %`
+                  : chartMode === 'variance'
+                    ? `Diverging Target Variance (Actual − ${activeBranchTarget.shortLabel}) in Rs. Millions per officer`
+                    : 'Paid vs. Not Paid Below-3 contracts this month per officer'}
               </p>
             </div>
 
@@ -469,18 +845,29 @@ export function BelowThreeCollectionPanel({
               <button
                 type="button"
                 onClick={() => setChartMode('amount')}
-                className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors ${
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   chartMode === 'amount'
                     ? 'bg-red-700 text-white shadow-xs'
                     : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
                 }`}
               >
-                Due vs Coll (Rs. M)
+                Target vs Coll
+              </button>
+              <button
+                type="button"
+                onClick={() => setChartMode('variance')}
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  chartMode === 'variance'
+                    ? 'bg-red-700 text-white shadow-xs'
+                    : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+                }`}
+              >
+                Variance (+/-)
               </button>
               <button
                 type="button"
                 onClick={() => setChartMode('contracts')}
-                className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors ${
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   chartMode === 'contracts'
                     ? 'bg-red-700 text-white shadow-xs'
                     : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
@@ -520,7 +907,7 @@ export function BelowThreeCollectionPanel({
                     <YAxis
                       yAxisId="right"
                       orientation="right"
-                      domain={[0, 120]}
+                      domain={[0, 160]}
                       tick={{ fill: axisColor, fontSize: 11 }}
                       axisLine={false}
                       tickLine={false}
@@ -540,17 +927,29 @@ export function BelowThreeCollectionPanel({
                       }}
                     />
                     <Legend wrapperStyle={{ fontSize: '12px' }} />
+                    <ReferenceLine
+                      yAxisId="right"
+                      y={100}
+                      stroke="#059669"
+                      strokeDasharray="4 4"
+                      label={{
+                        value: '100% Target',
+                        position: 'insideTopRight',
+                        fill: '#059669',
+                        fontSize: 10,
+                      }}
+                    />
                     <Bar
                       yAxisId="left"
-                      dataKey="dueM"
-                      name="Monthly Target / Due (M)"
+                      dataKey="targetM"
+                      name={`${activeBranchTarget.shortLabel} Share (M)`}
                       fill={isDark ? '#52525b' : '#a1a1aa'}
                       radius={[4, 4, 0, 0]}
                     />
                     <Bar
                       yAxisId="left"
                       dataKey="collectedM"
-                      name="Collected (M)"
+                      name="Actual Collected (M)"
                       fill="#059669"
                       radius={[4, 4, 0, 0]}
                     />
@@ -558,12 +957,59 @@ export function BelowThreeCollectionPanel({
                       yAxisId="right"
                       type="monotone"
                       dataKey="collectionPct"
-                      name="Collection %"
+                      name="Target Ach %"
                       stroke="#b91c1c"
                       strokeWidth={2.5}
                       dot={{ r: 3.5 }}
                     />
                   </ComposedChart>
+                ) : chartMode === 'variance' ? (
+                  <BarChart
+                    data={officerChartData}
+                    margin={{ top: 10, right: 14, left: 0, bottom: 6 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
+                    <XAxis
+                      dataKey="officer"
+                      tick={{ fill: axisColor, fontSize: 11 }}
+                      axisLine={{ stroke: gridColor }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fill: axisColor, fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(v) => `${v > 0 ? '+' : ''}${v}M`}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: tooltipBg,
+                        borderColor: tooltipBorder,
+                        borderRadius: '10px',
+                        fontSize: '12px',
+                      }}
+                      formatter={(value: unknown) => {
+                        const n = Number(value || 0);
+                        return [
+                          `${n >= 0 ? '+' : ''}Rs. ${n.toFixed(2)}M`,
+                          `Variance vs ${activeBranchTarget.shortLabel}`,
+                        ];
+                      }}
+                    />
+                    <ReferenceLine y={0} stroke={isDark ? '#71717a' : '#52525b'} strokeWidth={1.5} />
+                    <Bar
+                      dataKey="varianceM"
+                      name={`Variance vs ${activeBranchTarget.shortLabel} (M)`}
+                      radius={[4, 4, 4, 4]}
+                    >
+                      {officerChartData.map((entry) => (
+                        <Cell
+                          key={entry.officer}
+                          fill={entry.varianceM >= 0 ? '#059669' : '#b91c1c'}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
                 ) : (
                   <BarChart
                     data={officerChartData}
@@ -723,20 +1169,21 @@ export function BelowThreeCollectionPanel({
             <thead className="bg-zinc-50 dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
               <tr>
                 <th className="py-3 px-4">Officer</th>
-                <th className="py-3 px-3 text-right">Below-3 Total</th>
-                <th className="py-3 px-3 text-right">Paid (This Mo)</th>
-                <th className="py-3 px-3 text-right">Not Paid</th>
-                <th className="py-3 px-3 text-right">Monthly Due</th>
-                <th className="py-3 px-3 text-right">Collected</th>
+                <th className="py-3 px-3 text-right">Paid / Not Paid</th>
+                <th className="py-3 px-3 text-right">{activeBranchTarget.shortLabel}</th>
+                <th className="py-3 px-3 text-right">Actual Collected</th>
                 <th className="py-3 px-3 text-right">Variance (Rs.)</th>
-                <th className="py-3 px-3 text-right">Coll %</th>
-                <th className="py-3 px-4 text-right">Contracts Needed vs Due</th>
+                <th className="py-3 px-3 min-w-[175px]">Performance vs Target</th>
+                <th className="py-3 px-4 text-right">Contracts Needed</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 tabular-nums">
-              {snapshot.byOfficer.map((row) => {
+              {evaluatedOfficers.map((row) => {
                 const isSelected = selectedOfficer === row.officer;
-                const isSurplus = row.varianceAmount >= 0;
+                const isSurplus = row.targetVariance >= 0;
+                const barWidthPct = Math.min(100, (row.targetAchPct / 130) * 100);
+                const targetTickPct = (100 / 130) * 100;
+
                 return (
                   <tr
                     key={row.officer}
@@ -758,37 +1205,38 @@ export function BelowThreeCollectionPanel({
                             {row.officer}
                           </div>
                           <div className="text-[10px] font-mono text-zinc-500 dark:text-zinc-400">
-                            {row.role} · Paid {row.paidRatioPct.toFixed(0)}%
+                            {row.role} · {row.portfolioSharePct.toFixed(1)}% share · {row.totalCount.toLocaleString()} accts
                           </div>
                         </div>
                       </div>
                     </td>
-                    <td className="py-3 px-3 text-right font-mono font-bold text-zinc-900 dark:text-zinc-100">
-                      {row.totalCount.toLocaleString()}
-                    </td>
-                    <td className="py-3 px-3 text-right font-mono">
-                      <span className="text-emerald-700 dark:text-emerald-400 font-bold">
-                        {row.paidCount.toLocaleString()}
-                      </span>
-                      {row.partialPaidCount > 0 && (
-                        <div className="text-[10px] text-amber-600 dark:text-amber-400">
-                          ({row.partialPaidCount} partial)
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-3 px-3 text-right font-mono">
-                      <span className="text-red-700 dark:text-red-400 font-bold">
-                        {row.notPaidCount.toLocaleString()}
-                      </span>
-                      <div className="text-[10px] text-zinc-500">
-                        ({row.unpaidWithDueCount} w/ due)
+                    <td className="py-3 px-3 text-right font-mono whitespace-nowrap">
+                      <div>
+                        <span className="text-emerald-700 dark:text-emerald-400 font-bold">
+                          {row.paidCount.toLocaleString()}P
+                        </span>
+                        <span className="text-zinc-400 mx-1">/</span>
+                        <span className="text-red-700 dark:text-red-400 font-bold">
+                          {row.notPaidCount.toLocaleString()}NP
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                        {row.paidRatioPct.toFixed(0)}% paid
                       </div>
                     </td>
                     <td className="py-3 px-3 text-right font-mono text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
-                      {formatCompactRs(row.dueAmount)}
+                      <div className="font-semibold">{formatCompactRs(row.targetAmount)}</div>
+                      {targetMode !== 'full_due' && (
+                        <div className="text-[10px] text-zinc-400">
+                          Due: {formatCompactRs(row.dueAmount)}
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 px-3 text-right font-mono font-semibold text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
-                      {formatCompactRs(row.collectedAmount)}
+                      <div>{formatCompactRs(row.collectedAmount)}</div>
+                      <div className="text-[10px] text-zinc-500 dark:text-zinc-400 font-normal">
+                        {row.contributionTo20MPct.toFixed(1)}% of 20M
+                      </div>
                     </td>
                     <td
                       className={`py-3 px-3 text-right font-mono font-bold whitespace-nowrap ${
@@ -797,31 +1245,73 @@ export function BelowThreeCollectionPanel({
                           : 'text-red-700 dark:text-red-400'
                       }`}
                     >
-                      {isSurplus ? '+' : ''}
-                      {formatCompactRs(row.varianceAmount)}
-                    </td>
-                    <td className="py-3 px-3 text-right font-mono">
-                      <span
-                        className={`px-2 py-0.5 rounded-md font-bold ${
-                          row.collectionPct >= 100
-                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300'
-                            : row.collectionPct >= 75
-                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300'
-                              : 'bg-red-100 text-red-800 dark:bg-red-950/70 dark:text-red-300'
-                        }`}
-                      >
-                        {row.collectionPct.toFixed(1)}%
+                      <span className="inline-flex items-center justify-end gap-0.5">
+                        {isSurplus ? (
+                          <ArrowUpRight className="w-3.5 h-3.5 shrink-0" />
+                        ) : (
+                          <ArrowDownRight className="w-3.5 h-3.5 shrink-0" />
+                        )}
+                        {isSurplus ? '+' : ''}
+                        {formatCompactRs(row.targetVariance)}
                       </span>
                     </td>
+                    <td className="py-3 px-3">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2 text-[11px]">
+                          <span
+                            className={`inline-flex items-center gap-1 font-semibold ${
+                              row.perfTier === 'exceeded'
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : row.perfTier === 'near'
+                                  ? 'text-amber-700 dark:text-amber-400'
+                                  : 'text-red-700 dark:text-red-400'
+                            }`}
+                          >
+                            {row.perfTier === 'exceeded' ? (
+                              <TrendingUp className="w-3 h-3 shrink-0" />
+                            ) : row.perfTier === 'near' ? (
+                              <Clock className="w-3 h-3 shrink-0" />
+                            ) : (
+                              <TrendingDown className="w-3 h-3 shrink-0" />
+                            )}
+                            {row.perfTier === 'exceeded'
+                              ? 'Exceeded'
+                              : row.perfTier === 'near'
+                                ? 'Near Target'
+                                : 'Shortfall'}
+                          </span>
+                          <span className="font-mono font-bold text-zinc-900 dark:text-zinc-100">
+                            {row.targetAchPct.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="relative h-2 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-visible">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              row.perfTier === 'exceeded'
+                                ? 'bg-emerald-600'
+                                : row.perfTier === 'near'
+                                  ? 'bg-amber-500'
+                                  : 'bg-red-600'
+                            }`}
+                            style={{ width: `${barWidthPct}%` }}
+                          />
+                          <div
+                            className="absolute -top-0.5 -bottom-0.5 w-0.5 bg-zinc-900/60 dark:bg-white/60"
+                            style={{ left: `${targetTickPct}%` }}
+                            title="100% Target Line"
+                          />
+                        </div>
+                      </div>
+                    </td>
                     <td className="py-3 px-4 text-right font-mono whitespace-nowrap">
-                      {row.contractsNeededAgainstDue === 0 ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold">
-                          <CheckCircle2 className="w-3 h-3" />
-                          0 (Due Covered)
+                      {row.contractsNeededForTarget === 0 ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-bold">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Target Met
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 font-bold border border-amber-200 dark:border-amber-800/70">
-                          {row.contractsNeededAgainstDue} contracts
+                        <span className="text-amber-700 dark:text-amber-400 font-bold">
+                          {row.contractsNeededForTarget.toLocaleString()} contracts
                         </span>
                       )}
                     </td>
@@ -834,38 +1324,44 @@ export function BelowThreeCollectionPanel({
             <tfoot className="bg-zinc-900 text-white dark:bg-zinc-950 border-t-2 border-red-700 font-mono tabular-nums">
               <tr>
                 <td className="py-3.5 px-4 font-sans font-bold text-xs uppercase tracking-wide">
-                  Branch Total ({snapshot.byOfficer.length} Officers)
-                </td>
-                <td className="py-3.5 px-3 text-right font-bold">
-                  {snapshot.totalCount.toLocaleString()}
-                </td>
-                <td className="py-3.5 px-3 text-right font-bold text-emerald-400">
-                  {snapshot.paidCount.toLocaleString()} ({snapshot.paidRatioPct.toFixed(0)}%)
-                </td>
-                <td className="py-3.5 px-3 text-right font-bold text-red-400">
-                  {snapshot.notPaidCount.toLocaleString()}
+                  Branch Total ({evaluatedOfficers.length} Officers · {snapshot.totalCount.toLocaleString()} Accts)
                 </td>
                 <td className="py-3.5 px-3 text-right font-bold whitespace-nowrap">
-                  {formatCompactRs(snapshot.dueAmount)}
+                  <span className="text-emerald-400">{snapshot.paidCount.toLocaleString()}P</span>
+                  <span className="text-zinc-500 mx-1">/</span>
+                  <span className="text-red-400">{snapshot.notPaidCount.toLocaleString()}NP</span>
+                </td>
+                <td className="py-3.5 px-3 text-right font-bold whitespace-nowrap">
+                  {formatCompactRs(branchTargetStats.targetAmount)}
                 </td>
                 <td className="py-3.5 px-3 text-right font-bold text-emerald-400 whitespace-nowrap">
                   {formatCompactRs(snapshot.collectedAmount)}
                 </td>
                 <td
                   className={`py-3.5 px-3 text-right font-bold whitespace-nowrap ${
-                    snapshot.varianceAmount >= 0 ? 'text-emerald-400' : 'text-red-400'
+                    branchTargetStats.targetVariance >= 0 ? 'text-emerald-400' : 'text-red-400'
                   }`}
                 >
-                  {snapshot.varianceAmount >= 0 ? '+' : ''}
-                  {formatCompactRs(snapshot.varianceAmount)}
+                  {branchTargetStats.targetVariance >= 0 ? '+' : ''}
+                  {formatCompactRs(branchTargetStats.targetVariance)}
                 </td>
-                <td className="py-3.5 px-3 text-right font-bold">
-                  {snapshot.collectionPct.toFixed(1)}%
+                <td className="py-3.5 px-3 font-bold whitespace-nowrap">
+                  <span
+                    className={
+                      branchTargetStats.targetAchPct >= 100
+                        ? 'text-emerald-400'
+                        : branchTargetStats.targetAchPct >= 85
+                          ? 'text-amber-300'
+                          : 'text-red-400'
+                    }
+                  >
+                    {branchTargetStats.targetAchPct.toFixed(1)}% ({branchTargetStats.exceededCount}/{evaluatedOfficers.length} Met)
+                  </span>
                 </td>
                 <td className="py-3.5 px-4 text-right font-bold text-amber-300 whitespace-nowrap">
-                  {snapshot.contractsNeededAgainstDue === 0
-                    ? '✓ Due Covered'
-                    : `${snapshot.contractsNeededAgainstDue.toLocaleString()} contracts needed`}
+                  {branchTargetStats.contractsNeededForTarget === 0
+                    ? '✓ Target Achieved'
+                    : `${branchTargetStats.contractsNeededForTarget.toLocaleString()} contracts needed`}
                 </td>
               </tr>
             </tfoot>
