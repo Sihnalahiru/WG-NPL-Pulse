@@ -2,9 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Building2,
-  CheckCircle2,
-  ClipboardCheck,
-  Plus,
+  PhoneCall,
   Search,
   ShieldAlert,
   UserCheck,
@@ -16,7 +14,6 @@ import type {
   AersRecord,
   BorderlineAccountItem,
   MrpEnrichment,
-  TrackedContract,
 } from '../types/recovery';
 import {
   analyzeNextMonthBorderline,
@@ -24,19 +21,14 @@ import {
   formatCurrencyRs,
   normalizeContractNo,
   normalizeEvaluableFromAers,
-  normalizeEvaluableFromTracked,
 } from '../utils/recoveryEngine';
 import { PaymentPatternStrip } from './PaymentPatternStrip';
 import { UserAvatar } from './UserAvatar';
 import { WorstCaseProductBadge } from './WorstCaseProductBadge';
 
 interface NextMonthBorderlineCardsPanelProps {
-  trackedContracts: TrackedContract[];
   aersRecords: AersRecord[];
   mrpMap?: Map<string, MrpEnrichment>;
-  defaultScope?: 'aers' | 'tracked';
-  onAddFromMaster?: (record: AersRecord) => void;
-  onLogVisit?: (contract: TrackedContract) => void;
 }
 
 type RiskFilterMode =
@@ -59,38 +51,17 @@ interface OfficerBorderlineSummary {
   worstCount: number;
 }
 
+const EMPTY_SET = new Set<string>();
+
 export function NextMonthBorderlineCardsPanel({
-  trackedContracts,
   aersRecords,
   mrpMap,
-  defaultScope,
-  onAddFromMaster,
-  onLogVisit,
 }: NextMonthBorderlineCardsPanelProps) {
-  const initialScope: 'aers' | 'tracked' =
-    defaultScope ?? (aersRecords.length > 0 ? 'aers' : 'tracked');
-  const [scope, setScope] = useState<'aers' | 'tracked'>(initialScope);
   const [selectedOfficer, setSelectedOfficer] = useState<string>('ALL');
   const [selectedOffice, setSelectedOffice] = useState<string>('ALL');
   const [riskFilter, setRiskFilter] = useState<RiskFilterMode>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [visibleLimit, setVisibleLimit] = useState<number>(12);
-
-  const effectiveScope: 'aers' | 'tracked' =
-    scope === 'aers' && aersRecords.length === 0 ? 'tracked' : scope;
-
-  const trackedByNo = useMemo(() => {
-    const map = new Map<string, TrackedContract>();
-    trackedContracts.forEach((c) =>
-      map.set(normalizeContractNo(c.contractNo), c),
-    );
-    return map;
-  }, [trackedContracts]);
-
-  const trackedNos = useMemo(
-    () => new Set(trackedContracts.map((c) => normalizeContractNo(c.contractNo))),
-    [trackedContracts],
-  );
 
   const aersByNo = useMemo(() => {
     const map = new Map<string, AersRecord>();
@@ -98,12 +69,10 @@ export function NextMonthBorderlineCardsPanel({
     return map;
   }, [aersRecords]);
 
-  const evaluableItems = useMemo(() => {
-    if (effectiveScope === 'aers' && aersRecords.length > 0) {
-      return normalizeEvaluableFromAers(aersRecords, trackedNos, mrpMap);
-    }
-    return normalizeEvaluableFromTracked(trackedContracts);
-  }, [effectiveScope, aersRecords, trackedNos, mrpMap, trackedContracts]);
+  const evaluableItems = useMemo(
+    () => normalizeEvaluableFromAers(aersRecords, EMPTY_SET, mrpMap),
+    [aersRecords, mrpMap],
+  );
 
   const borderlineAnalysis = useMemo(
     () => analyzeNextMonthBorderline(evaluableItems),
@@ -240,7 +209,7 @@ export function NextMonthBorderlineCardsPanel({
       aria-label="Next-Month Borderline Command Cards"
       className="bg-white dark:bg-slate-900 border border-amber-200/80 dark:border-amber-900/50 rounded-2xl overflow-hidden shadow-xs"
     >
-      {/* Hero Focus Header with Custom Illustration */}
+      {/* Hero Focus Header */}
       <div className="p-5 sm:p-6 border-b border-slate-200 dark:border-slate-800 bg-gradient-to-br from-amber-50/70 via-white to-blue-50/40 dark:from-amber-950/20 dark:via-slate-900 dark:to-slate-900">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5">
           <div className="flex flex-col sm:flex-row sm:items-center gap-4 min-w-0">
@@ -266,46 +235,14 @@ export function NextMonthBorderlineCardsPanel({
                 <strong className="font-semibold text-slate-800 dark:text-slate-200">
                   &lt; 91 DPD
                 </strong>{' '}
-                account crossing into NPL this month-end or next month (+30d), with projected Capital + Arrears NPL impact and live field effort visibility.
+                account crossing into NPL this month-end or next month (+30d), with projected Capital + Arrears NPL impact and live effort counts.
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <div className="flex items-center gap-1 p-1 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg">
-              <button
-                type="button"
-                onClick={() => {
-                  setScope('aers');
-                  setSelectedOfficer('ALL');
-                  setSelectedOffice('ALL');
-                }}
-                disabled={aersRecords.length === 0}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 ${
-                  effectiveScope === 'aers'
-                    ? 'bg-amber-600 text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                Full AERS ({aersRecords.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setScope('tracked');
-                  setSelectedOfficer('ALL');
-                  setSelectedOffice('ALL');
-                }}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  effectiveScope === 'tracked'
-                    ? 'bg-amber-600 text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                Watchlist ({trackedContracts.length})
-              </button>
-            </div>
-          </div>
+          <span className="text-xs font-mono text-slate-500 dark:text-slate-400 shrink-0 tabular-nums">
+            AERS: {aersRecords.length.toLocaleString()} accts
+          </span>
         </div>
 
         {/* Dynamic Scope KPI Strip */}
@@ -358,7 +295,7 @@ export function NextMonthBorderlineCardsPanel({
               {filteredTotals.count > 0
                 ? (filteredTotals.efforts / filteredTotals.count).toFixed(1)
                 : '0.0'}{' '}
-              visits / acct
+              efforts / acct
             </div>
           </div>
 
@@ -370,7 +307,7 @@ export function NextMonthBorderlineCardsPanel({
               {filteredTotals.zeroEffort}
             </div>
             <div className="text-[10px] text-red-600 dark:text-red-400">
-              Immediate RO field action needed
+              Immediate officer action needed
             </div>
           </div>
         </div>
@@ -486,7 +423,7 @@ export function NextMonthBorderlineCardsPanel({
               className="px-2.5 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
             >
               <option value="ALL">
-                All Officers / Persons ({officerSummaries.length})
+                All Officers ({officerSummaries.length})
               </option>
               {officerSummaries.map((o) => (
                 <option key={o.officer} value={o.officer}>
@@ -512,13 +449,13 @@ export function NextMonthBorderlineCardsPanel({
           </div>
         </div>
 
-        {/* Per-Person (RO) Selectable Pill Strip & Summary Cards */}
+        {/* Per-Person (RO) Selectable Summary Cards */}
         {officerSummaries.length > 0 && (
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200">
                 <Users className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-                Per-Person Borderline Breakdown (Click an officer card to filter)
+                Per-Officer Borderline Breakdown (Click an officer card to filter)
               </div>
               {selectedOfficer !== 'ALL' && (
                 <button
@@ -659,7 +596,6 @@ export function NextMonthBorderlineCardsPanel({
               {displayedAccounts.map((item) => {
                 const normNo = normalizeContractNo(item.contractNo);
                 const masterRec = aersByNo.get(normNo);
-                const trackedRec = trackedByNo.get(normNo);
                 const isMonthEnd = item.riskTier === 'This Month-End (91+)';
                 const dpdPct = Math.min(
                   100,
@@ -685,10 +621,7 @@ export function NextMonthBorderlineCardsPanel({
                             </span>
                             {item.isWorst && (
                               <WorstCaseProductBadge
-                                product={
-                                  masterRec?.worstCaseProduct ??
-                                  trackedRec?.worstCaseProduct
-                                }
+                                product={masterRec?.worstCaseProduct}
                                 nplReason={item.nplReason}
                                 compact={true}
                               />
@@ -717,6 +650,16 @@ export function NextMonthBorderlineCardsPanel({
                         </div>
                       </div>
 
+                      {/* Payment History Strip directly under Contract No */}
+                      <PaymentPatternStrip
+                        mrp={mrpMap?.get(normNo)}
+                        lastPaidAmount={masterRec?.lastPaidAmount}
+                        lastPayDate={masterRec?.lastPayDate}
+                        totalCollection={masterRec?.totalCollection}
+                        showCategoryLine={true}
+                        compact={true}
+                      />
+
                       {/* Vehicle, Office Type & RO Meta */}
                       <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600 dark:text-slate-400">
                         <span className="font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
@@ -730,22 +673,6 @@ export function NextMonthBorderlineCardsPanel({
                           RO: {item.officer}
                         </span>
                       </div>
-
-                      {/* Payment History Strip (Jan-Oct MRP Pattern + Last Payment) */}
-                      <PaymentPatternStrip
-                        mrp={mrpMap?.get(normNo) ?? trackedRec?.mrp}
-                        lastPaidAmount={
-                          masterRec?.lastPaidAmount ?? trackedRec?.lastPaidAmount
-                        }
-                        lastPayDate={
-                          masterRec?.lastPayDate ?? trackedRec?.lastPayDate
-                        }
-                        totalCollection={
-                          masterRec?.totalCollection ?? trackedRec?.totalCollection
-                        }
-                        showCategoryLine={true}
-                        compact={true}
-                      />
                     </div>
 
                     {/* DPD Progression Gauge */}
@@ -818,43 +745,24 @@ export function NextMonthBorderlineCardsPanel({
                       </div>
                     </div>
 
-                    {/* Card Footer Actions */}
+                    {/* Card Footer */}
                     <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/80 dark:border-slate-800">
                       <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono tabular-nums">
-                        Collection:{' '}
-                        {formatCompactRs(
-                          masterRec?.totalCollection ??
-                            trackedRec?.totalCollection ??
-                            0,
-                        )}
+                        Collection: {formatCompactRs(masterRec?.totalCollection ?? 0)}
                       </span>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        {trackedRec && onLogVisit ? (
-                          <button
-                            type="button"
-                            onClick={() => onLogVisit(trackedRec)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 whitespace-nowrap"
-                          >
-                            <ClipboardCheck className="w-3 h-3" />
-                            Log Visit
-                          </button>
-                        ) : item.isTracked ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            Tracked
-                          </span>
-                        ) : masterRec && onAddFromMaster ? (
-                          <button
-                            type="button"
-                            onClick={() => onAddFromMaster(masterRec)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap"
-                          >
-                            <Plus className="w-3 h-3" />
-                            Track
-                          </button>
-                        ) : null}
-                      </div>
+                      <span
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-mono font-semibold rounded border whitespace-nowrap ${
+                          item.assignOfficerEfforts <= 0
+                            ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800'
+                            : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800'
+                        }`}
+                      >
+                        <PhoneCall className="w-3 h-3 shrink-0" />
+                        {item.assignOfficerEfforts <= 0
+                          ? '0 Efforts'
+                          : `${item.assignOfficerEfforts} Assign / ${item.totalEfforts} Tot`}
+                      </span>
                     </div>
                   </article>
                 );

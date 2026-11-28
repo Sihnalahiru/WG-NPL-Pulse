@@ -6,50 +6,33 @@ import {
   Flame,
   ShieldAlert,
 } from 'lucide-react';
-import type { AersRecord, TrackedContract } from '../types/recovery';
+import type { AersRecord } from '../types/recovery';
 import {
   computeOfficeTypeBreakdown,
   formatCompactRs,
   formatCurrencyRs,
-  normalizeContractNo,
   normalizeEvaluableFromAers,
-  normalizeEvaluableFromTracked,
 } from '../utils/recoveryEngine';
 import { UserAvatar } from './UserAvatar';
 
 interface OfficeTypeBreakdownPanelProps {
-  trackedContracts: TrackedContract[];
   aersRecords: AersRecord[];
-  defaultScope?: 'aers' | 'tracked';
   title?: string;
 }
 
+const EMPTY_SET = new Set<string>();
+
 export function OfficeTypeBreakdownPanel({
-  trackedContracts,
   aersRecords,
-  defaultScope,
-  title = 'Office Type -> RO Strategy Breakdown (NPL & Borderline)',
+  title = 'Office Type → RO Strategy Breakdown (NPL & Borderline)',
 }: OfficeTypeBreakdownPanelProps) {
-  const resolvedDefaultScope: 'aers' | 'tracked' =
-    defaultScope ?? (aersRecords.length > 0 ? 'aers' : 'tracked');
-  const [scope, setScope] = useState<'aers' | 'tracked'>(resolvedDefaultScope);
   const [focusMode, setFocusMode] = useState<'all' | 'npl' | 'borderline' | 'worst'>('all');
   const [expandedOffices, setExpandedOffices] = useState<Record<string, boolean>>({});
 
-  const effectiveScope: 'aers' | 'tracked' =
-    scope === 'aers' && aersRecords.length === 0 ? 'tracked' : scope;
-
-  const trackedNos = useMemo(
-    () => new Set(trackedContracts.map((c) => normalizeContractNo(c.contractNo))),
-    [trackedContracts],
+  const evaluableItems = useMemo(
+    () => normalizeEvaluableFromAers(aersRecords, EMPTY_SET),
+    [aersRecords],
   );
-
-  const evaluableItems = useMemo(() => {
-    if (effectiveScope === 'aers' && aersRecords.length > 0) {
-      return normalizeEvaluableFromAers(aersRecords, trackedNos);
-    }
-    return normalizeEvaluableFromTracked(trackedContracts);
-  }, [effectiveScope, aersRecords, trackedNos, trackedContracts]);
 
   const officeSummaries = useMemo(
     () => computeOfficeTypeBreakdown(evaluableItems),
@@ -141,38 +124,12 @@ export function OfficeTypeBreakdownPanel({
               </button>
             ))}
           </div>
-
-          <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-950 rounded-lg">
-            <button
-              type="button"
-              onClick={() => setScope('aers')}
-              disabled={aersRecords.length === 0}
-              className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap disabled:opacity-40 ${
-                effectiveScope === 'aers'
-                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              Full AERS ({aersRecords.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setScope('tracked')}
-              className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap ${
-                effectiveScope === 'tracked'
-                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              Watchlist ({trackedContracts.length})
-            </button>
-          </div>
         </div>
       </div>
 
       {visibleOffices.length === 0 ? (
         <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
-          No Office Type records yet. Upload or paste your daily AERS report to populate the Office Type → RO hierarchy automatically.
+          No Office Type records yet. Upload your daily AERS report to populate the Office Type → RO hierarchy automatically.
         </div>
       ) : (
         <div className="divide-y divide-slate-200 dark:divide-slate-800">

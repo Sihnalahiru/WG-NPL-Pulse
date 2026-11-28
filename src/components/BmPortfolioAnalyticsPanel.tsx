@@ -9,13 +9,12 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { BarChart3, CalendarRange, Search, Users } from 'lucide-react';
+import { BarChart3, CalendarRange, Search, ShieldCheck, Users } from 'lucide-react';
 import type {
   AersMetadata,
   AersRecord,
   MonthlySnapshot,
   MrpEnrichment,
-  TrackedContract,
 } from '../types/recovery';
 import {
   CAMPAIGN_MONTHS,
@@ -24,6 +23,7 @@ import {
   formatCompactRs,
   formatCurrencyRs,
 } from '../utils/recoveryEngine';
+import { BelowOneRatioPanel } from './BelowOneRatioPanel';
 import { NextMonthBorderlineCardsPanel } from './NextMonthBorderlineCardsPanel';
 import { OfficerEffortSummaryPanel } from './OfficerEffortSummaryPanel';
 import { UserAvatar } from './UserAvatar';
@@ -32,22 +32,16 @@ interface BmPortfolioAnalyticsPanelProps {
   aersRecords: AersRecord[];
   aersMeta?: AersMetadata | null;
   mrpMap?: Map<string, MrpEnrichment>;
-  trackedContracts: TrackedContract[];
   monthlySnapshots: MonthlySnapshot[];
   isDark: boolean;
-  onAddFromMaster?: (record: AersRecord) => void;
-  onLogVisit?: (contract: TrackedContract) => void;
 }
 
 export function BmPortfolioAnalyticsPanel({
   aersRecords,
   aersMeta,
   mrpMap,
-  trackedContracts,
   monthlySnapshots,
   isDark,
-  onAddFromMaster,
-  onLogVisit,
 }: BmPortfolioAnalyticsPanelProps) {
   const [officerRole, setOfficerRole] = useState<'RO' | 'MO'>('RO');
   const [officerSearch, setOfficerSearch] = useState('');
@@ -61,13 +55,50 @@ export function BmPortfolioAnalyticsPanel({
     if (aersMeta?.bmBranchSnapshot?.ageBuckets?.length) {
       return aersMeta.bmBranchSnapshot.ageBuckets;
     }
-    return computeBmAgeBuckets(aersRecords, trackedContracts);
-  }, [aersMeta, aersRecords, trackedContracts]);
+    return computeBmAgeBuckets(aersRecords, []);
+  }, [aersMeta, aersRecords]);
 
   const totalContracts = useMemo(
-    () => ageBuckets.reduce((s, b) => s + b.count, 0),
-    [ageBuckets],
+    () =>
+      aersMeta?.bmBranchSnapshot?.totalContracts ??
+      ageBuckets.reduce((s, b) => s + b.count, 0),
+    [aersMeta, ageBuckets],
   );
+
+  const branchNplTotals = useMemo(() => {
+    const snap = aersMeta?.bmBranchSnapshot;
+    const opNplCount =
+      snap?.openingNplCount ??
+      aersRecords.filter((r) => (r.opNpl || 0) > 0).length;
+    const closingNplCount =
+      snap?.closingNplCount ??
+      aersRecords.filter((r) => (r.npl || 0) > 0).length;
+    const totalOpNpl =
+      snap?.totalOpNpl ??
+      aersRecords.reduce((s, r) => s + (r.opNpl || 0), 0);
+    const totalClosingNpl =
+      snap?.totalClosingNpl ??
+      aersRecords.reduce((s, r) => s + (r.npl || 0), 0);
+
+    const belowOneCount =
+      snap?.belowOneCount ??
+      ageBuckets
+        .filter((b) => b.code === '[A]' || b.code === '[B]')
+        .reduce((s, b) => s + b.count, 0);
+    const ratio90Pct =
+      snap?.ratio90Pct ??
+      (totalContracts > 0 ? (belowOneCount / totalContracts) * 100 : 0);
+
+    return {
+      opNplCount,
+      closingNplCount,
+      totalOpNpl,
+      totalClosingNpl,
+      netVariance: totalClosingNpl - totalOpNpl,
+      belowOneCount,
+      ratio90Pct,
+    };
+  }, [aersMeta, aersRecords, ageBuckets, totalContracts]);
 
   const officerRows = useMemo(() => {
     const snapRows =
@@ -77,11 +108,11 @@ export function BmPortfolioAnalyticsPanel({
     const rows =
       snapRows && snapRows.length > 0
         ? snapRows
-        : computeBmOfficerPerformance(aersRecords, trackedContracts, officerRole);
+        : computeBmOfficerPerformance(aersRecords, [], officerRole);
     const q = officerSearch.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((r) => r.officer.toLowerCase().includes(q));
-  }, [aersMeta, aersRecords, trackedContracts, officerRole, officerSearch]);
+  }, [aersMeta, aersRecords, officerRole, officerSearch]);
 
   const campaignProgress = useMemo(() => {
     const byMonth = new Map<string, MonthlySnapshot>();
@@ -101,12 +132,75 @@ export function BmPortfolioAnalyticsPanel({
   const dataScopeLabel =
     aersMeta?.bmBranchSnapshot
       ? `Full Branch AERS Snapshot (${totalContracts.toLocaleString()} contracts · ${aersRecords.length.toLocaleString()} NPL/Borderline)`
-      : aersRecords.length > 0
-        ? `NPL & Borderline AERS (${aersRecords.length.toLocaleString()} contracts)`
-        : `Tracked Watchlist (${trackedContracts.length} contracts)`;
+      : `AERS Portfolio (${aersRecords.length.toLocaleString()} contracts)`;
 
   return (
     <div className="space-y-6">
+      {/* BM Branch NPL Totals & 90 Ratio Reconciliation Strip */}
+      <section
+        aria-label="Branch NPL Totals and 90 Ratio Summary"
+        className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 tabular-nums"
+      >
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
+          <div className="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            Branch Opening NPL (Op Npl &gt; 0)
+          </div>
+          <div className="mt-1.5 text-xl font-bold font-mono text-slate-900 dark:text-slate-100">
+            {formatCurrencyRs(branchNplTotals.totalOpNpl)}
+          </div>
+          <div className="mt-1 text-xs font-mono text-slate-500 dark:text-slate-400">
+            {branchNplTotals.opNplCount.toLocaleString()} NPL Contracts
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-red-200/80 dark:border-red-900/50 rounded-xl p-4">
+          <div className="text-[11px] font-medium uppercase tracking-wider text-red-700 dark:text-red-400">
+            Branch Closing NPL (NPL &gt; 0)
+          </div>
+          <div className="mt-1.5 text-xl font-bold font-mono text-red-600 dark:text-red-400">
+            {formatCurrencyRs(branchNplTotals.totalClosingNpl)}
+          </div>
+          <div className="mt-1 text-xs font-mono text-red-600/80 dark:text-red-400/80">
+            {branchNplTotals.closingNplCount.toLocaleString()} NPL Contracts
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
+          <div className="text-[11px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            Net NPL Variance (Closing − Opening)
+          </div>
+          <div
+            className={`mt-1.5 text-xl font-bold font-mono ${
+              branchNplTotals.netVariance <= 0
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : 'text-red-600 dark:text-red-400'
+            }`}
+          >
+            {branchNplTotals.netVariance > 0 ? '+' : ''}
+            {formatCurrencyRs(branchNplTotals.netVariance)}
+          </div>
+          <div className="mt-1 text-xs font-mono text-slate-500 dark:text-slate-400">
+            {branchNplTotals.closingNplCount - branchNplTotals.opNplCount >= 0 ? '+' : ''}
+            {branchNplTotals.closingNplCount - branchNplTotals.opNplCount} contracts net change
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-emerald-200/80 dark:border-emerald-900/50 rounded-xl p-4">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+              Below 1 (≤ 1.00) · 90 Ratio
+            </span>
+            <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          </div>
+          <div className="mt-1.5 text-xl font-bold font-mono text-emerald-700 dark:text-emerald-300">
+            {branchNplTotals.ratio90Pct.toFixed(1)}%
+          </div>
+          <div className="mt-1 text-xs font-mono text-slate-500 dark:text-slate-400">
+            {branchNplTotals.belowOneCount.toLocaleString()} / {totalContracts.toLocaleString()} (Target 90%)
+          </div>
+        </div>
+      </section>
+
       {/* Monthly Campaign Progress (Nov 2026 - Mar 2027) */}
       <section
         aria-label="Monthly Progress Through March 2027"
@@ -121,7 +215,7 @@ export function BmPortfolioAnalyticsPanel({
               </h2>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Each month&apos;s branch &amp; watchlist progress is saved automatically on every workbook upload and preserved through March 2027.
+              Each day&apos;s last AERS upload locks that day&apos;s official figures, rolling up cleanly into each month&apos;s progress through March 2027.
             </p>
           </div>
           <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
@@ -152,7 +246,7 @@ export function BmPortfolioAnalyticsPanel({
                 <div className="mt-2 space-y-1 text-[11px]">
                   <div className="flex items-center justify-between">
                     <span className="text-slate-500 dark:text-slate-400">
-                      Branch NPL
+                      Closing NPL
                     </span>
                     <span className="font-mono font-semibold text-red-600 dark:text-red-400">
                       {formatCompactRs(
@@ -170,13 +264,12 @@ export function BmPortfolioAnalyticsPanel({
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-slate-500 dark:text-slate-400">
-                      Coll Eff %
+                      90 Ratio / Coll
                     </span>
                     <span className="font-mono font-semibold text-blue-600 dark:text-blue-400">
-                      {(
-                        snapshot.branchCollectionPct ?? snapshot.collectionPct
-                      ).toFixed(1)}
-                      %
+                      {snapshot.ratio90Pct !== undefined
+                        ? `${snapshot.ratio90Pct.toFixed(1)}%`
+                        : `${(snapshot.branchCollectionPct ?? snapshot.collectionPct).toFixed(1)}%`}
                     </span>
                   </div>
                 </div>
@@ -347,7 +440,7 @@ export function BmPortfolioAnalyticsPanel({
               </h2>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Compare Collection Efficiency %, Net NPL Variance (Closing NPL − Op Npl), and Below 1 Age retention rate.
+              Compare Collection Efficiency %, Opening vs. Closing NPL (with exact counts), and 90 Ratio % (Below 1 / Total Contracts).
             </p>
           </div>
 
@@ -405,7 +498,7 @@ export function BmPortfolioAnalyticsPanel({
                 <th className="py-2.5 px-3 text-right">Op Npl</th>
                 <th className="py-2.5 px-3 text-right">Closing NPL</th>
                 <th className="py-2.5 px-3 text-right">Net NPL Variance</th>
-                <th className="py-2.5 px-4 text-right">Below 1 Age Retention</th>
+                <th className="py-2.5 px-4 text-right">90 Ratio (≤1 / Total)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800 tabular-nums">
@@ -421,6 +514,12 @@ export function BmPortfolioAnalyticsPanel({
               ) : (
                 officerRows.map((row) => {
                   const varianceGood = row.netNplVariance <= 0;
+                  const ratio90 =
+                    row.ratio90Pct !== undefined
+                      ? row.ratio90Pct
+                      : row.totalCount > 0
+                        ? (row.belowOneCount / row.totalCount) * 100
+                        : 0;
                   return (
                     <tr
                       key={`${row.role}_${row.officer}`}
@@ -456,9 +555,19 @@ export function BmPortfolioAnalyticsPanel({
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-600 dark:text-slate-400">
                         {formatCompactRs(row.opNpl)}
+                        {row.openingNplCount !== undefined && (
+                          <span className="block text-[10px] text-slate-400">
+                            {row.openingNplCount} accts
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-900 dark:text-slate-100">
                         {formatCompactRs(row.closingNpl)}
+                        {row.closingNplCount !== undefined && (
+                          <span className="block text-[10px] text-red-500">
+                            {row.closingNplCount} accts
+                          </span>
+                        )}
                       </td>
                       <td
                         className={`py-2.5 px-3 text-right font-mono font-semibold ${
@@ -471,11 +580,19 @@ export function BmPortfolioAnalyticsPanel({
                         {formatCompactRs(row.netNplVariance)}
                       </td>
                       <td className="py-2.5 px-4 text-right font-mono">
-                        <span className="font-semibold text-blue-700 dark:text-blue-400">
-                          {row.belowOneRetentionPct.toFixed(1)}%
+                        <span
+                          className={`font-semibold ${
+                            ratio90 >= 90
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : ratio90 >= 80
+                                ? 'text-blue-700 dark:text-blue-400'
+                                : 'text-amber-700 dark:text-amber-400'
+                          }`}
+                        >
+                          {ratio90.toFixed(1)}%
                         </span>
                         <span className="ml-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-                          ({row.belowOneCount}/{row.opBelowOneCount || row.totalCount})
+                          ({row.belowOneCount}/{row.totalCount})
                         </span>
                       </td>
                     </tr>
@@ -487,19 +604,23 @@ export function BmPortfolioAnalyticsPanel({
         </div>
       </section>
 
-      {/* Visual Next-Month Borderline Risk Cards with Per-Officer Filters */}
-      <NextMonthBorderlineCardsPanel
-        trackedContracts={trackedContracts}
+      {/* Below 1 (≤ 1.00) 90 Ratio Action Plan & User-Wise Quick Wins */}
+      <BelowOneRatioPanel
         aersRecords={aersRecords}
+        aersMeta={aersMeta ?? null}
         mrpMap={mrpMap}
-        onAddFromMaster={onAddFromMaster}
-        onLogVisit={onLogVisit}
       />
 
-      {/* High-Risk (Borderline & NPL) Field Effort Summary grouped by RO & Office Type */}
+      {/* Visual Next-Month Borderline Risk Cards with Per-Officer Filters */}
+      <NextMonthBorderlineCardsPanel
+        aersRecords={aersRecords}
+        mrpMap={mrpMap}
+      />
+
+      {/* Officer Efforts & Age-Group Breakdown */}
       <OfficerEffortSummaryPanel
         aersRecords={aersRecords}
-        trackedContracts={trackedContracts}
+        aersMeta={aersMeta}
         mrpMap={mrpMap}
       />
     </div>

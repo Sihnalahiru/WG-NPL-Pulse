@@ -3,7 +3,7 @@ import type { AersMetadata } from '../types/recovery';
 import { SecurityVaultIllustration } from './FinanceIllustrations';
 
 interface BackupSettingsPanelProps {
-  trackedCount: number;
+  staffAssignmentsCount: number;
   snapshotsCount: number;
   aersMeta: AersMetadata | null;
   isAdminAuthenticated: boolean;
@@ -13,7 +13,7 @@ interface BackupSettingsPanelProps {
 }
 
 export function BackupSettingsPanel({
-  trackedCount,
+  staffAssignmentsCount,
   snapshotsCount,
   aersMeta,
   isAdminAuthenticated,
@@ -30,7 +30,7 @@ export function BackupSettingsPanel({
               WG Pulse Persistence &amp; JSON Backup
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-              Your Active Watchlist, visit histories, latest AERS Master Lookup, and lightweight per-officer opening baseline persist in browser storage. Each new daily AERS upload or paste cleanly replaces the prior snapshot so storage never piles up.
+              Your latest AERS Master Lookup, Assign User follow-up rosters, daily locked snapshots, and per-officer opening baseline persist in browser storage. Each same-day AERS upload updates today&apos;s snapshot with the latest file while locking prior days cleanly.
             </p>
           </div>
 
@@ -40,16 +40,16 @@ export function BackupSettingsPanel({
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 tabular-nums">
           <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
             <div className="text-xs text-slate-500 dark:text-slate-400">
-              Active Watchlist
+              Assign User Follow-Ups
             </div>
             <div className="mt-1 text-xl font-bold font-mono text-slate-900 dark:text-slate-100">
-              {trackedCount}
+              {staffAssignmentsCount}
             </div>
           </div>
 
           <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
             <div className="text-xs text-slate-500 dark:text-slate-400">
-              Monthly Snapshots
+              Daily &amp; Monthly Snapshots
             </div>
             <div className="mt-1 text-xl font-bold font-mono text-slate-900 dark:text-slate-100">
               {snapshotsCount}

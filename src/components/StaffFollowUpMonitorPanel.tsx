@@ -1,11 +1,14 @@
 import { useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
   CheckCircle2,
   Clock,
   ClipboardCheck,
+  Layers,
+  PhoneCall,
   Plus,
   Search,
   Trash2,
@@ -28,24 +31,24 @@ import {
 import {
   STAFF_FOLLOWUP_NAMES,
   type AersRecord,
+  type MrpEnrichment,
   type StaffAssignedContract,
-  type TrackedContract,
 } from '../types/recovery';
 import {
   CAMPAIGN_MONTHS,
   formatCompactRs,
   formatCurrencyRs,
-  getOfficerByOfficeType,
   getTodayISO,
   isWorstCategory,
   normalizeContractNo,
 } from '../utils/recoveryEngine';
+import { PaymentPatternStrip } from './PaymentPatternStrip';
 import { UserAvatar } from './UserAvatar';
 import { WorstCaseProductBadge } from './WorstCaseProductBadge';
 
 interface StaffFollowUpMonitorPanelProps {
   aersRecords: AersRecord[];
-  trackedContracts: TrackedContract[];
+  mrpMap?: Map<string, MrpEnrichment>;
   assignments: StaffAssignedContract[];
   isDark: boolean;
   onAssignBulk: (newItems: StaffAssignedContract[]) => void;
@@ -57,8 +60,6 @@ interface EvaluatedStaffContract {
   assignment: StaffAssignedContract;
   matchedInAers: boolean;
   cusName: string;
-  originalOfficer: string;
-  officeType: string;
   vehicleNo: string;
   nextDueDate: string;
   lastPayDate: string;
@@ -71,10 +72,13 @@ interface EvaluatedStaffContract {
   opAge: number;
   closingAge: number;
   ageVariance: number;
-  trend: 'improving' | 'stable' | 'worsening';
+  trend: 'reducing' | 'steady' | 'worsening';
   actualDpd: number;
   closingDebtor: number;
   closingNpl: number;
+  assignEfforts: number;
+  totalEfforts: number;
+  effortPct: number;
   isWorst: boolean;
   nplReason: string;
   worstCaseProduct: string;
@@ -93,10 +97,12 @@ interface StaffMemberStats {
   avgOpAge: number;
   avgClosingAge: number;
   avgAgeVariance: number;
-  improvedCount: number;
-  stableCount: number;
-  worsenedCount: number;
-  overallTrend: 'improving' | 'stable' | 'worsening' | 'idle';
+  reducingCount: number;
+  steadyCount: number;
+  worseningCount: number;
+  assignEfforts: number;
+  zeroEffortCount: number;
+  overallTrend: 'reducing' | 'steady' | 'worsening' | 'idle';
 }
 
 function getDefaultMonthKey(): string {
@@ -116,9 +122,11 @@ function formatMonthLabel(monthKey: string): string {
   return dt.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 }
 
+const PAGE_SIZE = 25;
+
 export function StaffFollowUpMonitorPanel({
   aersRecords,
-  trackedContracts,
+  mrpMap,
   assignments,
   isDark,
   onAssignBulk,
@@ -132,11 +140,13 @@ export function StaffFollowUpMonitorPanel({
   const [showAssignForm, setShowAssignForm] = useState(true);
 
   const [filterStaff, setFilterStaff] = useState<string>('ALL');
-  const [statusFilter, setStatusFilter] = useState<
-    'all' | 'paid' | 'pending' | 'improving' | 'worsening'
+  const [modalStaff, setModalStaff] = useState<string | null>(null);
+  const [modalFilter, setModalFilter] = useState<
+    'all' | 'paid' | 'pending' | 'reducing' | 'worsening' | 'zero_effort'
   >('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [confirmClearKey, setConfirmClearKey] = useState<string | null>(null);
+  const [modalSearch, setModalSearch] = useState('');
+  const [modalPage, setModalPage] = useState(1);
+  const [confirmClearModal, setConfirmClearModal] = useState(false);
 
   const monthOptions = useMemo(() => {
     const keys = new Set<string>([getDefaultMonthKey()]);
@@ -156,16 +166,6 @@ export function StaffFollowUpMonitorPanel({
     });
     return map;
   }, [aersRecords]);
-
-  const trackedByNo = useMemo(() => {
-    const map = new Map<string, TrackedContract>();
-    trackedContracts.forEach((c) => {
-      if (c && c.contractNo) {
-        map.set(normalizeContractNo(c.contractNo), c);
-      }
-    });
-    return map;
-  }, [trackedContracts]);
 
   const monthAssignments = useMemo(
     () => assignments.filter((a) => a.monthKey === selectedMonth),
@@ -194,7 +194,7 @@ export function StaffFollowUpMonitorPanel({
     let newCount = 0;
 
     parsedBulkTokens.forEach((tok) => {
-      if (aersByNo.has(tok) || trackedByNo.has(tok)) matchedAers += 1;
+      if (aersByNo.has(tok)) matchedAers += 1;
       if (existingForStaffMonth.has(tok)) {
         duplicates += 1;
       } else {
@@ -208,7 +208,7 @@ export function StaffFollowUpMonitorPanel({
       duplicates,
       newCount,
     };
-  }, [parsedBulkTokens, aersByNo, trackedByNo, existingForStaffMonth]);
+  }, [parsedBulkTokens, aersByNo, existingForStaffMonth]);
 
   const handleAssignSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -220,20 +220,18 @@ export function StaffFollowUpMonitorPanel({
     parsedBulkTokens.forEach((tok) => {
       if (existingForStaffMonth.has(tok)) return;
       const aers = aersByNo.get(tok);
-      const tracked = trackedByNo.get(tok);
-      const opAge = Number(aers?.opAge ?? tracked?.opAge ?? aers?.currentAge ?? tracked?.currentAge) || 0;
-      const due =
-        Number(aers?.currentMonthDue || aers?.dueBudgetMonth || tracked?.currentMonthDue) || 0;
-      const coll = Number(aers?.totalCollection ?? tracked?.totalCollection) || 0;
+      const opAge = Number(aers?.opAge ?? aers?.currentAge) || 0;
+      const due = Number(aers?.currentMonthDue || aers?.dueBudgetMonth) || 0;
+      const coll = Number(aers?.totalCollection) || 0;
 
       itemsToAdd.push({
-        contractNo: aers?.contractNo ?? tracked?.contractNo ?? tok,
+        contractNo: aers?.contractNo ?? tok,
         staffName: assignStaff,
         monthKey: selectedMonth,
         assignedAt: today,
         assignedOpAge: opAge,
-        assignedDebtor: Number(aers?.closingDebtor ?? tracked?.closingDebtor) || 0,
-        assignedNpl: Number(aers?.npl ?? tracked?.npl) || 0,
+        assignedDebtor: Number(aers?.closingDebtor) || 0,
+        assignedNpl: Number(aers?.npl) || 0,
         assignedDue: due,
         assignedCollection: coll,
         note: assignNote.trim() || undefined,
@@ -248,25 +246,16 @@ export function StaffFollowUpMonitorPanel({
     }
   };
 
-  // Evaluate every assigned contract in the selected month against live AERS / Watchlist
   const evaluatedContracts = useMemo<EvaluatedStaffContract[]>(() => {
     return monthAssignments.map((assignment) => {
       const key = normalizeContractNo(assignment.contractNo);
       const aers = aersByNo.get(key);
-      const tracked = trackedByNo.get(key);
 
       const currentMonthDue =
-        Number(
-          aers?.currentMonthDue ||
-            aers?.dueBudgetMonth ||
-            tracked?.currentMonthDue ||
-            assignment.assignedDue,
-        ) || 0;
-      const totalCollection =
-        Number(aers?.totalCollection ?? tracked?.totalCollection ?? 0) || 0;
-      const lastPaidAmount =
-        Number(aers?.lastPaidAmount ?? tracked?.lastPaidAmount ?? 0) || 0;
-      const lastPayDate = aers?.lastPayDate || tracked?.lastPayDate || '';
+        Number(aers?.currentMonthDue || aers?.dueBudgetMonth || assignment.assignedDue) || 0;
+      const totalCollection = Number(aers?.totalCollection ?? 0) || 0;
+      const lastPaidAmount = Number(aers?.lastPaidAmount ?? 0) || 0;
+      const lastPayDate = aers?.lastPayDate || '';
 
       const isPaid = totalCollection > 0;
       const pendingDue = Math.max(0, currentMonthDue - totalCollection);
@@ -277,33 +266,29 @@ export function StaffFollowUpMonitorPanel({
             ? 100
             : 0;
 
-      const opAge =
-        Number(aers?.opAge ?? tracked?.opAge ?? assignment.assignedOpAge) || 0;
-      const closingAge =
-        Number(aers?.currentAge ?? tracked?.currentAge ?? assignment.assignedOpAge) || 0;
+      const opAge = Number(aers?.opAge ?? assignment.assignedOpAge) || 0;
+      const closingAge = Number(aers?.currentAge ?? assignment.assignedOpAge) || 0;
       const ageVariance = Number((closingAge - opAge).toFixed(2));
 
-      let trend: 'improving' | 'stable' | 'worsening' = 'stable';
-      if (ageVariance <= -0.05 || (isPaid && pendingDue <= 0 && ageVariance <= 0)) {
-        trend = 'improving';
-      } else if (ageVariance >= 0.05 || (!isPaid && currentMonthDue > 0 && closingAge >= 2.5)) {
+      let trend: 'reducing' | 'steady' | 'worsening' = 'steady';
+      if (ageVariance <= -0.05) {
+        trend = 'reducing';
+      } else if (ageVariance >= 0.05) {
         trend = 'worsening';
       }
 
-      const nplReason = aers?.nplReason || tracked?.nplReason || '';
-      const worstCaseProduct = aers?.worstCaseProduct || tracked?.worstCaseProduct || '';
+      const assignEfforts = Number(aers?.assignOfficerEfforts ?? 0) || 0;
+      const totalEfforts = Number(aers?.totalEfforts ?? 0) || 0;
+      const effortPct = Math.min(100, Math.round((assignEfforts / 3) * 100));
+
+      const nplReason = aers?.nplReason || '';
+      const worstCaseProduct = aers?.worstCaseProduct || '';
 
       return {
         assignment,
-        matchedInAers: Boolean(aers || tracked),
-        cusName: aers?.cusName || tracked?.cusName || 'Not in latest AERS',
-        originalOfficer: aers
-          ? getOfficerByOfficeType(aers)
-          : tracked
-            ? getOfficerByOfficeType(tracked)
-            : '—',
-        officeType: aers?.officeType || tracked?.officeType || '—',
-        vehicleNo: aers?.currentStock || tracked?.vehicleNo || '',
+        matchedInAers: Boolean(aers),
+        cusName: aers?.cusName || 'Not in latest AERS',
+        vehicleNo: aers?.currentStock || '',
         nextDueDate: aers?.nextDueDate || '',
         lastPayDate,
         lastPaidAmount,
@@ -316,17 +301,19 @@ export function StaffFollowUpMonitorPanel({
         closingAge,
         ageVariance,
         trend,
-        actualDpd: Number(aers?.actualDpd ?? tracked?.actualDpd ?? 0) || 0,
-        closingDebtor: Number(aers?.closingDebtor ?? tracked?.closingDebtor ?? assignment.assignedDebtor) || 0,
-        closingNpl: Number(aers?.npl ?? tracked?.npl ?? assignment.assignedNpl) || 0,
+        actualDpd: Number(aers?.actualDpd ?? 0) || 0,
+        closingDebtor: Number(aers?.closingDebtor ?? assignment.assignedDebtor) || 0,
+        closingNpl: Number(aers?.npl ?? assignment.assignedNpl) || 0,
+        assignEfforts,
+        totalEfforts,
+        effortPct,
         isWorst: isWorstCategory(nplReason, worstCaseProduct),
         nplReason,
         worstCaseProduct,
       };
     });
-  }, [monthAssignments, aersByNo, trackedByNo]);
+  }, [monthAssignments, aersByNo]);
 
-  // Compute per-staff performance metrics for all 10 roster members
   const staffStatsList = useMemo<StaffMemberStats[]>(() => {
     return STAFF_FOLLOWUP_NAMES.map((staffName) => {
       const items = evaluatedContracts.filter(
@@ -358,18 +345,20 @@ export function StaffFollowUpMonitorPanel({
           : 0;
       const avgAgeVariance = Number((avgClosingAge - avgOpAge).toFixed(2));
 
-      const improvedCount = items.filter((i) => i.trend === 'improving').length;
-      const stableCount = items.filter((i) => i.trend === 'stable').length;
-      const worsenedCount = items.filter((i) => i.trend === 'worsening').length;
+      const reducingCount = items.filter((i) => i.trend === 'reducing').length;
+      const steadyCount = items.filter((i) => i.trend === 'steady').length;
+      const worseningCount = items.filter((i) => i.trend === 'worsening').length;
+      const assignEfforts = items.reduce((s, i) => s + i.assignEfforts, 0);
+      const zeroEffortCount = items.filter((i) => i.assignEfforts <= 0).length;
 
       let overallTrend: StaffMemberStats['overallTrend'] = 'idle';
       if (assignedCount > 0) {
-        if (avgAgeVariance < 0 || (paymentHitPct >= 60 && improvedCount >= worsenedCount)) {
-          overallTrend = 'improving';
-        } else if (worsenedCount > improvedCount || paymentHitPct < 30) {
+        if (avgAgeVariance < 0 || reducingCount > worseningCount) {
+          overallTrend = 'reducing';
+        } else if (worseningCount > reducingCount || paymentHitPct < 30) {
           overallTrend = 'worsening';
         } else {
-          overallTrend = 'stable';
+          overallTrend = 'steady';
         }
       }
 
@@ -386,9 +375,11 @@ export function StaffFollowUpMonitorPanel({
         avgOpAge,
         avgClosingAge,
         avgAgeVariance,
-        improvedCount,
-        stableCount,
-        worsenedCount,
+        reducingCount,
+        steadyCount,
+        worseningCount,
+        assignEfforts,
+        zeroEffortCount,
         overallTrend,
       };
     });
@@ -401,34 +392,9 @@ export function StaffFollowUpMonitorPanel({
         name: s.staffName,
         dueK: Number((s.totalDue / 1000).toFixed(1)),
         collectedK: Number((s.totalCollection / 1000).toFixed(1)),
-        paidCount: s.paidCount,
-        pendingCount: s.pendingCount,
-        collectionPct: s.collectionPct,
       }));
   }, [staffStatsList]);
 
-  const scopedContracts = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return evaluatedContracts.filter((item) => {
-      if (filterStaff !== 'ALL' && item.assignment.staffName !== filterStaff) {
-        return false;
-      }
-      if (statusFilter === 'paid' && !item.isPaid) return false;
-      if (statusFilter === 'pending' && item.isPaid) return false;
-      if (statusFilter === 'improving' && item.trend !== 'improving') return false;
-      if (statusFilter === 'worsening' && item.trend !== 'worsening') return false;
-      if (!q) return true;
-      return (
-        item.assignment.contractNo.toLowerCase().includes(q) ||
-        item.cusName.toLowerCase().includes(q) ||
-        item.assignment.staffName.toLowerCase().includes(q) ||
-        item.originalOfficer.toLowerCase().includes(q) ||
-        item.vehicleNo.toLowerCase().includes(q)
-      );
-    });
-  }, [evaluatedContracts, filterStaff, statusFilter, searchQuery]);
-
-  // KPI totals for current view scope (ALL or selected staff)
   const kpiTotals = useMemo(() => {
     const base =
       filterStaff === 'ALL'
@@ -448,9 +414,24 @@ export function StaffFollowUpMonitorPanel({
     const avgClosingAge =
       assigned > 0 ? base.reduce((s, i) => s + i.closingAge, 0) / assigned : 0;
     const avgVariance = Number((avgClosingAge - avgOpAge).toFixed(2));
-    const improved = base.filter((i) => i.trend === 'improving').length;
-    const stable = base.filter((i) => i.trend === 'stable').length;
-    const worsened = base.filter((i) => i.trend === 'worsening').length;
+    const reducing = base.filter((i) => i.trend === 'reducing').length;
+    const steady = base.filter((i) => i.trend === 'steady').length;
+    const worsening = base.filter((i) => i.trend === 'worsening').length;
+
+    const ageBuckets = [
+      { label: '≤ 1.00', count: 0 },
+      { label: '1.01 – 1.99', count: 0 },
+      { label: '2.00 – 2.99', count: 0 },
+      { label: '3.00 – 5.99', count: 0 },
+      { label: '6.00+', count: 0 },
+    ];
+    base.forEach((i) => {
+      if (i.closingAge <= 1.0) ageBuckets[0].count += 1;
+      else if (i.closingAge < 2.0) ageBuckets[1].count += 1;
+      else if (i.closingAge < 3.0) ageBuckets[2].count += 1;
+      else if (i.closingAge < 6.0) ageBuckets[3].count += 1;
+      else ageBuckets[4].count += 1;
+    });
 
     return {
       assigned,
@@ -464,11 +445,37 @@ export function StaffFollowUpMonitorPanel({
       avgOpAge,
       avgClosingAge,
       avgVariance,
-      improved,
-      stable,
-      worsened,
+      reducing,
+      steady,
+      worsening,
+      ageBuckets,
     };
   }, [evaluatedContracts, filterStaff]);
+
+  const modalContracts = useMemo(() => {
+    if (!modalStaff) return [];
+    const q = modalSearch.trim().toLowerCase();
+    return evaluatedContracts.filter((item) => {
+      if (item.assignment.staffName !== modalStaff) return false;
+      if (modalFilter === 'paid' && !item.isPaid) return false;
+      if (modalFilter === 'pending' && item.isPaid) return false;
+      if (modalFilter === 'reducing' && item.trend !== 'reducing') return false;
+      if (modalFilter === 'worsening' && item.trend !== 'worsening') return false;
+      if (modalFilter === 'zero_effort' && item.assignEfforts > 0) return false;
+      if (!q) return true;
+      return (
+        item.assignment.contractNo.toLowerCase().includes(q) ||
+        item.cusName.toLowerCase().includes(q) ||
+        item.vehicleNo.toLowerCase().includes(q)
+      );
+    });
+  }, [evaluatedContracts, modalStaff, modalFilter, modalSearch]);
+
+  const modalTotalPages = Math.max(1, Math.ceil(modalContracts.length / PAGE_SIZE));
+  const pagedModalContracts = modalContracts.slice(
+    (modalPage - 1) * PAGE_SIZE,
+    modalPage * PAGE_SIZE,
+  );
 
   const axisColor = isDark ? '#94a3b8' : '#64748b';
   const gridColor = isDark ? '#1e293b' : '#e2e8f0';
@@ -483,15 +490,29 @@ export function StaffFollowUpMonitorPanel({
           <div className="flex items-center gap-2">
             <ClipboardCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <h2 className="font-display text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100">
-              Staff Monthly Follow-Up Assignment &amp; Performance Monitor
+              Assign User Follow-Up &amp; Performance Dashboard
             </h2>
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-3xl leading-relaxed">
-            Assign any RO or MO contract in bulk to staff members for monthly follow-up. Automatically monitors payments received vs. pending, due-date collection progress, and Op Age → Closing Age variance &amp; trend.
+            Assign bulk contracts (250+ supported) to your 10 Assign Users. Dashboard shows clean breakdown metrics; click any user&apos;s Name Card to open their contract-level popup table.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <select
+            value={filterStaff}
+            onChange={(e) => setFilterStaff(e.target.value)}
+            aria-label="Filter dashboard by Assign User"
+            className="px-3 py-2 text-xs font-semibold rounded-lg border border-blue-300 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-950/40 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+          >
+            <option value="ALL">Assign User: All ({STAFF_FOLLOWUP_NAMES.length})</option>
+            {STAFF_FOLLOWUP_NAMES.map((name) => (
+              <option key={name} value={name}>
+                Assign User: {name}
+              </option>
+            ))}
+          </select>
+
           <select
             value={selectedMonth}
             onChange={(e) => setSelectedMonth(e.target.value)}
@@ -500,7 +521,7 @@ export function StaffFollowUpMonitorPanel({
           >
             {monthOptions.map((mk) => (
               <option key={mk} value={mk}>
-                Month: {formatMonthLabel(mk)} ({mk})
+                Month: {formatMonthLabel(mk)}
               </option>
             ))}
           </select>
@@ -532,7 +553,7 @@ export function StaffFollowUpMonitorPanel({
                 Assign Monthly Follow-Up Contracts (Bulk Paste)
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Select a staff member and paste contract numbers (comma, space, or line separated). Any RO/MO contract is accepted.
+                Select an Assign User and paste contract numbers (comma, space, or line separated).
               </p>
             </div>
             <span className="text-xs font-mono text-slate-500 dark:text-slate-400 tabular-nums">
@@ -547,7 +568,7 @@ export function StaffFollowUpMonitorPanel({
                   htmlFor="staff-assign-select"
                   className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
                 >
-                  Staff Member
+                  Assign User
                 </label>
                 <select
                   id="staff-assign-select"
@@ -571,14 +592,14 @@ export function StaffFollowUpMonitorPanel({
                   htmlFor="staff-assign-note"
                   className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
                 >
-                  Optional Follow-Up Note
+                  Optional Batch Note
                 </label>
                 <input
                   id="staff-assign-note"
                   type="text"
                   value={assignNote}
                   onChange={(e) => setAssignNote(e.target.value)}
-                  placeholder="e.g. Week 2 due-date push / Borderline batch"
+                  placeholder="e.g. Week 2 due-date push"
                   className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-600"
                 />
               </div>
@@ -622,7 +643,7 @@ export function StaffFollowUpMonitorPanel({
                 rows={4}
                 value={bulkInput}
                 onChange={(e) => setBulkInput(e.target.value)}
-                placeholder={'Paste contract numbers here (from Excel, WhatsApp, or AERS)...\nExample:\nWGFBA068748\nWGTWA060977, WGMBA064016'}
+                placeholder={'Paste contract numbers here (supports 250+ contracts at once)...\nExample:\nWGFBA068748\nWGTWA060977, WGMBA064016'}
                 className="w-full p-3 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-600"
               />
             </div>
@@ -630,11 +651,11 @@ export function StaffFollowUpMonitorPanel({
         </form>
       )}
 
-      {/* KPI Summary Strip */}
+      {/* KPI Breakdown Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 tabular-nums">
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
           <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Assigned Contracts · {filterStaff === 'ALL' ? 'All Staff' : filterStaff}
+            Assigned Contracts · {filterStaff === 'ALL' ? 'All Users' : filterStaff}
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-bold font-mono text-slate-900 dark:text-slate-100">
@@ -680,13 +701,13 @@ export function StaffFollowUpMonitorPanel({
             {formatCompactRs(kpiTotals.totalPendingDue)}
           </div>
           <div className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
-            {kpiTotals.pending} unpaid contracts still pending
+            {kpiTotals.pending} unpaid contracts pending
           </div>
         </div>
 
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
           <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Op Age → Closing Age Variance
+            Op Age → Closing Age Movement
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span
@@ -707,32 +728,53 @@ export function StaffFollowUpMonitorPanel({
           </div>
           <div className="mt-1.5 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
             <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-              {kpiTotals.improved} Improved
+              ↓{kpiTotals.reducing} Reducing
             </span>
             <span aria-hidden="true">·</span>
-            <span>{kpiTotals.stable} Held</span>
+            <span>={kpiTotals.steady} Steady</span>
             <span aria-hidden="true">·</span>
             <span className="text-red-600 dark:text-red-400 font-medium">
-              {kpiTotals.worsened} Worsened
+              ↑{kpiTotals.worsening} Worsening
             </span>
           </div>
         </div>
       </div>
 
-      {/* Staff Comparison Chart (when at least 1 staff has assignments) */}
+      {/* Age-Group Breakdown Strip */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-2.5">
+        <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 dark:text-slate-200">
+          <Layers className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+          Assigned Portfolio Breakdown by Closing Age Group
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 tabular-nums">
+          {kpiTotals.ageBuckets.map((b) => (
+            <div
+              key={b.label}
+              className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex items-center justify-between"
+            >
+              <span className="text-xs text-slate-500 dark:text-slate-400">{b.label}</span>
+              <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
+                {b.count}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Staff Comparison Chart */}
       {activeStaffChartData.length > 0 && (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
             <div>
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Staff Due-Date Collection vs. Monthly Due (Rs. Thousands)
+                Assign User Due vs. Collection (Rs. Thousands)
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Live comparison across assigned follow-up staff for {formatMonthLabel(selectedMonth)}
+                Live comparison across active Assign Users for {formatMonthLabel(selectedMonth)}
               </p>
             </div>
             <span className="text-xs font-mono text-slate-500 dark:text-slate-400 tabular-nums">
-              {activeStaffChartData.length} of {STAFF_FOLLOWUP_NAMES.length} staff active
+              {activeStaffChartData.length} of {STAFF_FOLLOWUP_NAMES.length} active
             </span>
           </div>
 
@@ -768,32 +810,27 @@ export function StaffFollowUpMonitorPanel({
                   ]}
                 />
                 <Legend wrapperStyle={{ fontSize: '12px' }} />
-                <Bar
-                  dataKey="dueK"
-                  name="Monthly Due (k)"
-                  fill="#94a3b8"
-                  radius={[4, 4, 0, 0]}
-                />
-                <Bar
-                  dataKey="collectedK"
-                  name="Collected (k)"
-                  fill="#10b981"
-                  radius={[4, 4, 0, 0]}
-                />
+                <Bar dataKey="dueK" name="Monthly Due (k)" fill="#94a3b8" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="collectedK" name="Collected (k)" fill="#10b981" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
       )}
 
-      {/* 10-Staff Performance Cards Grid */}
+      {/* 10 Assign User Name Cards — Clicking opens Contract Detail Popup Modal */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Users className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Staff Roster Progress ({formatMonthLabel(selectedMonth)})
-            </h3>
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Assign User Performance Cards ({formatMonthLabel(selectedMonth)})
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Click any user card to open their contract-wise popup table (DPD / Debtor, Call / Effort Status, Arrears Age Reducing vs Worsening).
+              </p>
+            </div>
           </div>
           {filterStaff !== 'ALL' && (
             <button
@@ -802,7 +839,7 @@ export function StaffFollowUpMonitorPanel({
               className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline"
             >
               <X className="w-3.5 h-3.5" />
-              Show All Staff
+              Show All Users
             </button>
           )}
         </div>
@@ -815,10 +852,11 @@ export function StaffFollowUpMonitorPanel({
                 key={staff.staffName}
                 type="button"
                 onClick={() => {
-                  setFilterStaff((prev) =>
-                    prev === staff.staffName ? 'ALL' : staff.staffName,
-                  );
-                  setAssignStaff(staff.staffName);
+                  setModalStaff(staff.staffName);
+                  setModalFilter('all');
+                  setModalSearch('');
+                  setModalPage(1);
+                  setConfirmClearModal(false);
                 }}
                 className={`text-left p-3.5 rounded-xl border transition-all flex flex-col justify-between gap-2.5 ${
                   isSelected
@@ -841,22 +879,22 @@ export function StaffFollowUpMonitorPanel({
                     </div>
                   </div>
 
-                  {staff.overallTrend === 'improving' && (
+                  {staff.overallTrend === 'reducing' && (
                     <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
-                      <TrendingUp className="w-3.5 h-3.5" />
-                      Up
+                      <TrendingDown className="w-3.5 h-3.5" />
+                      Red.
                     </span>
                   )}
                   {staff.overallTrend === 'worsening' && (
                     <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-red-600 dark:text-red-400">
-                      <TrendingDown className="w-3.5 h-3.5" />
-                      Push
+                      <TrendingUp className="w-3.5 h-3.5" />
+                      Wors.
                     </span>
                   )}
-                  {staff.overallTrend === 'stable' && (
-                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                  {staff.overallTrend === 'steady' && (
+                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-slate-600 dark:text-slate-400">
                       <ArrowRight className="w-3.5 h-3.5" />
-                      Flat
+                      Steady
                     </span>
                   )}
                 </div>
@@ -891,26 +929,23 @@ export function StaffFollowUpMonitorPanel({
                       </div>
                       <div className="text-right">
                         <span className="text-slate-500 dark:text-slate-400 block text-[10px]">
-                          Age Var.
+                          Efforts
                         </span>
                         <span
                           className={`font-mono font-semibold ${
-                            staff.avgAgeVariance < 0
-                              ? 'text-emerald-600 dark:text-emerald-400'
-                              : staff.avgAgeVariance > 0
-                                ? 'text-red-600 dark:text-red-400'
-                                : 'text-slate-700 dark:text-slate-300'
+                            staff.zeroEffortCount > 0
+                              ? 'text-rose-600 dark:text-rose-400'
+                              : 'text-blue-600 dark:text-blue-400'
                           }`}
                         >
-                          {staff.avgAgeVariance > 0 ? '+' : ''}
-                          {staff.avgAgeVariance.toFixed(2)}
+                          {staff.assignEfforts} ({staff.zeroEffortCount} 0-eff)
                         </span>
                       </div>
                     </div>
                   </>
                 ) : (
                   <div className="text-[11px] text-slate-400 dark:text-slate-500 pt-1">
-                    Click to select &amp; assign contracts
+                    Click to inspect or assign above
                   </div>
                 )}
               </button>
@@ -919,297 +954,297 @@ export function StaffFollowUpMonitorPanel({
         </div>
       </div>
 
-      {/* Detailed Contract-Level Monitoring Table */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-        <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Assigned Contracts Live Progress ({scopedContracts.length})
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Payment received status, due-date collection vs. pending, and Opening Age → Closing Age variance
-            </p>
-          </div>
+      {/* POPUP MODAL FOR SELECTED ASSIGN USER */}
+      {modalStaff && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${modalStaff} Assigned Contracts Popup`}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
+          onClick={() => setModalStaff(null)}
+        >
+          <div
+            className="w-full max-w-5xl max-h-[88vh] flex flex-col bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 bg-slate-50/80 dark:bg-slate-950/70">
+              <div className="flex items-center gap-3">
+                <UserAvatar name={modalStaff} sizeClass="w-11 h-11 text-xs" />
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                    {modalStaff} — Assigned Contracts ({modalContracts.length})
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {formatMonthLabel(selectedMonth)} · DPD / Debtor, Call / Effort Status, and Arrears Age Movement
+                  </p>
+                </div>
+              </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-950 rounded-lg">
-              {(
-                [
-                  { id: 'all', label: 'All' },
-                  { id: 'paid', label: 'Paid' },
-                  { id: 'pending', label: 'Pending' },
-                  { id: 'improving', label: 'Improved' },
-                  { id: 'worsening', label: 'Worsened' },
-                ] as const
-              ).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setStatusFilter(tab.id)}
-                  className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap ${
-                    statusFilter === tab.id
-                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="relative w-52">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search contract, client, staff..."
-                className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
-              />
-            </div>
-
-            {filterStaff !== 'ALL' &&
-              monthAssignments.some((a) => a.staffName === filterStaff) && (
-                confirmClearKey === `${filterStaff}:${selectedMonth}` ? (
-                  <div className="inline-flex items-center gap-1.5 text-xs">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onClearStaffMonth(filterStaff, selectedMonth);
-                        setConfirmClearKey(null);
-                      }}
-                      className="px-2.5 py-1.5 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 whitespace-nowrap"
-                    >
-                      Confirm Clear {filterStaff}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmClearKey(null)}
-                      className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setConfirmClearKey(`${filterStaff}:${selectedMonth}`)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-red-200 dark:border-red-900 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 whitespace-nowrap"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Clear {filterStaff}
-                  </button>
-                )
-              )}
-          </div>
-        </div>
-
-        {scopedContracts.length === 0 ? (
-          <div className="p-10 text-center space-y-2">
-            <ClipboardCheck className="w-6 h-6 text-slate-400 mx-auto" />
-            <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-              No assigned contracts found for {filterStaff === 'ALL' ? 'this month' : filterStaff}
-            </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-              Select a staff member above and paste a bulk list of contract numbers to start tracking their payment receipt, due-date collection, and Op Age → Closing Age progress.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                  <th className="py-2.5 px-4">Contract &amp; Client</th>
-                  <th className="py-2.5 px-3">Assigned Staff</th>
-                  <th className="py-2.5 px-3">Payment Status</th>
-                  <th className="py-2.5 px-3 text-right">Due vs. Collected</th>
-                  <th className="py-2.5 px-3 text-right">Pending Due</th>
-                  <th className="py-2.5 px-3 text-right">Op Age → Closing</th>
-                  <th className="py-2.5 px-3 text-right">Variance &amp; Trend</th>
-                  <th className="py-2.5 px-4 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-800 tabular-nums">
-                {scopedContracts.map((item) => (
-                  <tr
-                    key={`${item.assignment.staffName}_${item.assignment.monthKey}_${item.assignment.contractNo}`}
-                    className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 align-top"
-                  >
-                    <td className="py-3 px-4 min-w-[200px]">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
-                          {item.assignment.contractNo}
-                        </span>
-                        {item.isWorst && (
-                          <WorstCaseProductBadge
-                            product={item.worstCaseProduct}
-                            nplReason={item.nplReason}
-                            compact={true}
-                          />
-                        )}
-                      </div>
-                      <div className="text-slate-700 dark:text-slate-300 mt-0.5 truncate max-w-[220px]">
-                        {item.cusName}
-                      </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                        {item.officeType} · {item.originalOfficer}
-                        {item.actualDpd > 0 ? ` · ${item.actualDpd} DPD` : ''}
-                      </div>
-                    </td>
-
-                    <td className="py-3 px-3 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        <UserAvatar
-                          name={item.assignment.staffName}
-                          sizeClass="w-6 h-6 text-[9px]"
-                        />
-                        <div>
-                          <div className="font-semibold text-slate-900 dark:text-slate-100">
-                            {item.assignment.staffName}
-                          </div>
-                          <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
-                            {item.assignment.assignedAt}
-                          </div>
-                        </div>
-                      </div>
-                      {item.assignment.note && (
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 max-w-[140px] truncate">
-                          {item.assignment.note}
-                        </div>
-                      )}
-                    </td>
-
-                    <td className="py-3 px-3 whitespace-nowrap">
-                      {item.isPaid ? (
-                        <div>
-                          <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400">
-                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                            Payment Received
-                          </span>
-                          <div className="text-[11px] font-mono text-slate-600 dark:text-slate-300 mt-0.5">
-                            Last: {formatCompactRs(item.lastPaidAmount || item.totalCollection)}
-                            {item.lastPayDate ? ` · ${item.lastPayDate}` : ''}
-                          </div>
-                        </div>
-                      ) : (
-                        <div>
-                          <span className="inline-flex items-center gap-1 font-semibold text-amber-700 dark:text-amber-400">
-                            <Clock className="w-3.5 h-3.5 shrink-0" />
-                            Pending Payment
-                          </span>
-                          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                            {item.nextDueDate ? `Due: ${item.nextDueDate}` : 'No collection yet'}
-                          </div>
-                        </div>
-                      )}
-                    </td>
-
-                    <td className="py-3 px-3 text-right font-mono min-w-[155px]">
-                      <div className="font-semibold text-emerald-700 dark:text-emerald-400">
-                        {formatCurrencyRs(item.totalCollection)}
-                      </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                        of {formatCurrencyRs(item.currentMonthDue)} ({item.collectionPct}%)
-                      </div>
-                      <div className="mt-1 h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${
-                            item.collectionPct >= 100
-                              ? 'bg-emerald-500'
-                              : item.collectionPct > 0
-                                ? 'bg-blue-500'
-                                : 'bg-slate-300 dark:bg-slate-700'
-                          }`}
-                          style={{ width: `${Math.min(100, Math.max(0, item.collectionPct))}%` }}
-                        />
-                      </div>
-                    </td>
-
-                    <td className="py-3 px-3 text-right font-mono">
-                      <span
-                        className={
-                          item.pendingDue > 0
-                            ? 'font-semibold text-amber-700 dark:text-amber-400'
-                            : 'font-semibold text-emerald-600 dark:text-emerald-400'
-                        }
-                      >
-                        {item.pendingDue > 0 ? formatCurrencyRs(item.pendingDue) : 'Settled'}
-                      </span>
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                        Debtor: {formatCompactRs(item.closingDebtor)}
-                      </div>
-                    </td>
-
-                    <td className="py-3 px-3 text-right font-mono whitespace-nowrap">
-                      <div className="text-slate-900 dark:text-slate-100 font-semibold">
-                        {item.opAge.toFixed(2)} → {item.closingAge.toFixed(2)}
-                      </div>
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                        Assign Op: {item.assignment.assignedOpAge.toFixed(2)}
-                      </div>
-                    </td>
-
-                    <td className="py-3 px-3 text-right whitespace-nowrap">
-                      <div
-                        className={`inline-flex items-center gap-1 font-mono font-bold ${
-                          item.trend === 'improving'
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : item.trend === 'worsening'
-                              ? 'text-red-600 dark:text-red-400'
-                              : 'text-slate-600 dark:text-slate-300'
-                        }`}
-                      >
-                        {item.trend === 'improving' ? (
-                          <ArrowDownRight className="w-3.5 h-3.5" />
-                        ) : item.trend === 'worsening' ? (
-                          <ArrowUpRight className="w-3.5 h-3.5" />
-                        ) : (
-                          <ArrowRight className="w-3.5 h-3.5" />
-                        )}
-                        {item.ageVariance > 0 ? '+' : ''}
-                        {item.ageVariance.toFixed(2)}
-                      </div>
-                      <div
-                        className={`text-[10px] font-medium ${
-                          item.trend === 'improving'
-                            ? 'text-emerald-700 dark:text-emerald-400'
-                            : item.trend === 'worsening'
-                              ? 'text-red-600 dark:text-red-400'
-                              : 'text-slate-500 dark:text-slate-400'
-                        }`}
-                      >
-                        {item.trend === 'improving'
-                          ? 'Improving'
-                          : item.trend === 'worsening'
-                            ? 'Worsening'
-                            : 'Held Steady'}
-                      </div>
-                    </td>
-
-                    <td className="py-3 px-4 text-right whitespace-nowrap">
+              <div className="flex items-center gap-2">
+                {evaluatedContracts.some((c) => c.assignment.staffName === modalStaff) && (
+                  confirmClearModal ? (
+                    <div className="inline-flex items-center gap-1.5 text-xs">
                       <button
                         type="button"
-                        onClick={() =>
-                          onRemoveAssignment(
-                            item.assignment.staffName,
-                            item.assignment.monthKey,
-                            item.assignment.contractNo,
-                          )
-                        }
-                        title="Remove from staff follow-up list"
-                        className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-red-300 hover:text-red-600 dark:hover:text-red-400"
+                        onClick={() => {
+                          onClearStaffMonth(modalStaff, selectedMonth);
+                          setConfirmClearModal(false);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-rose-600 text-white font-semibold hover:bg-rose-700"
                       >
-                        <Trash2 className="w-3 h-3" />
-                        Remove
+                        Confirm Clear
                       </button>
-                    </td>
-                  </tr>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearModal(false)}
+                        className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearModal(true)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Clear Month
+                    </button>
+                  )
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setModalStaff(null)}
+                  aria-label="Close popup"
+                  className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-950 rounded-lg">
+                {(
+                  [
+                    { id: 'all', label: 'All' },
+                    { id: 'reducing', label: 'Reducing ↓' },
+                    { id: 'worsening', label: 'Worsening ↑' },
+                    { id: 'paid', label: 'Paid' },
+                    { id: 'pending', label: 'Pending' },
+                    { id: 'zero_effort', label: '0 Efforts' },
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => {
+                      setModalFilter(tab.id);
+                      setModalPage(1);
+                    }}
+                    className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap ${
+                      modalFilter === tab.id
+                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
                 ))}
-              </tbody>
-            </table>
+              </div>
+
+              <div className="relative w-full sm:w-60">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={modalSearch}
+                  onChange={(e) => {
+                    setModalSearch(e.target.value);
+                    setModalPage(1);
+                  }}
+                  placeholder="Search contract or client..."
+                  className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                />
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              {pagedModalContracts.length === 0 ? (
+                <div className="p-10 text-center text-xs text-slate-500 dark:text-slate-400">
+                  No contracts assigned to <strong>{modalStaff}</strong> matching this filter.
+                </div>
+              ) : (
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <tr>
+                      <th className="py-2.5 px-4">Contract &amp; Client</th>
+                      <th className="py-2.5 px-3 text-right">DPD / Debtor</th>
+                      <th className="py-2.5 px-3">Call / Effort Status</th>
+                      <th className="py-2.5 px-4 text-right">Age Trend &amp; Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800 tabular-nums">
+                    {pagedModalContracts.map((item) => (
+                      <tr
+                        key={`${item.assignment.staffName}_${item.assignment.monthKey}_${item.assignment.contractNo}`}
+                        className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40"
+                      >
+                        <td className="py-2.5 px-4">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
+                              {item.assignment.contractNo}
+                            </span>
+                            {item.isWorst && (
+                              <WorstCaseProductBadge
+                                product={item.worstCaseProduct}
+                                nplReason={item.nplReason}
+                                compact={true}
+                              />
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-600 dark:text-slate-300 truncate max-w-[230px]">
+                            {item.cusName}
+                          </div>
+                          <PaymentPatternStrip
+                            mrp={mrpMap?.get(normalizeContractNo(item.assignment.contractNo))}
+                            lastPaidAmount={item.lastPaidAmount}
+                            lastPayDate={item.lastPayDate}
+                            totalCollection={item.totalCollection}
+                            compact={true}
+                          />
+                          <div className="mt-1 text-[10px] font-mono">
+                            {item.isPaid ? (
+                              <span className="inline-flex items-center gap-0.5 text-emerald-700 dark:text-emerald-400 font-semibold">
+                                <CheckCircle2 className="w-3 h-3" />
+                                Paid {formatCompactRs(item.totalCollection)} / Due {formatCompactRs(item.currentMonthDue)}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-0.5 text-amber-700 dark:text-amber-400 font-semibold">
+                                <Clock className="w-3 h-3" />
+                                Pending {formatCompactRs(item.pendingDue)}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        <td className="py-2.5 px-3 text-right font-mono">
+                          <span
+                            className={`font-bold ${
+                              item.actualDpd >= 91
+                                ? 'text-rose-600 dark:text-rose-400'
+                                : 'text-amber-600 dark:text-amber-400'
+                            }`}
+                          >
+                            {item.actualDpd} DPD
+                          </span>
+                          <div className="text-[11px] text-slate-700 dark:text-slate-300">
+                            {formatCurrencyRs(item.closingDebtor)}
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            Age: {item.opAge.toFixed(2)} → {item.closingAge.toFixed(2)}
+                          </div>
+                        </td>
+
+                        <td className="py-2.5 px-3 min-w-[180px]">
+                          <div className="flex items-center justify-between text-[11px] mb-1">
+                            {item.assignEfforts > 0 ? (
+                              <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400">
+                                <PhoneCall className="w-3 h-3" />
+                                {item.assignEfforts} Assign / {item.totalEfforts} Total
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 font-semibold text-rose-600 dark:text-rose-400">
+                                <AlertTriangle className="w-3 h-3" />
+                                0 Efforts Given
+                              </span>
+                            )}
+                            <span className="font-mono text-[10px] text-slate-500">
+                              {item.effortPct}%
+                            </span>
+                          </div>
+                          <div className="h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${
+                                item.assignEfforts > 0 ? 'bg-emerald-500' : 'bg-rose-500'
+                              }`}
+                              style={{ width: `${Math.max(6, item.effortPct)}%` }}
+                            />
+                          </div>
+                        </td>
+
+                        <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                          <div className="inline-flex items-center gap-2">
+                            {item.trend === 'reducing' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800">
+                                <ArrowDownRight className="w-3.5 h-3.5" />
+                                Reducing ({item.ageVariance.toFixed(2)})
+                              </span>
+                            ) : item.trend === 'worsening' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded border bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800">
+                                <ArrowUpRight className="w-3.5 h-3.5" />
+                                Worsening (+{item.ageVariance.toFixed(2)})
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded border bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
+                                <ArrowRight className="w-3.5 h-3.5" />
+                                Steady ({item.ageVariance >= 0 ? '+' : ''}
+                                {item.ageVariance.toFixed(2)})
+                              </span>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onRemoveAssignment(
+                                  item.assignment.staffName,
+                                  item.assignment.monthKey,
+                                  item.assignment.contractNo,
+                                )
+                              }
+                              title="Remove contract"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {modalTotalPages > 1 && (
+              <div className="px-4 sm:px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 flex items-center justify-between text-xs">
+                <span className="font-mono text-slate-500 dark:text-slate-400 tabular-nums">
+                  Page {modalPage} of {modalTotalPages} ({modalContracts.length} contracts)
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={modalPage <= 1}
+                    onClick={() => setModalPage((p) => Math.max(1, p - 1))}
+                    className="px-3 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40"
+                  >
+                    Prev
+                  </button>
+                  <button
+                    type="button"
+                    disabled={modalPage >= modalTotalPages}
+                    onClick={() => setModalPage((p) => Math.min(modalTotalPages, p + 1))}
+                    className="px-3 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

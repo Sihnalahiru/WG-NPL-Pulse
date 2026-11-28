@@ -1,60 +1,131 @@
+import { useMemo } from 'react';
 import {
   AlertOctagon,
   AlertTriangle,
   Bell,
   BellRing,
-  CalendarCheck,
-  Truck,
+  Flame,
+  PhoneOff,
   Volume2,
 } from 'lucide-react';
 import type {
+  AersRecord,
+  MrpEnrichment,
   NotificationPreferences,
-  TrackedContract,
 } from '../types/recovery';
 import {
-  buildRecoveryAlertDigest,
-  formatCurrencyRs,
+  formatCompactRs,
   getDaysRemainingTo30th,
+  getOfficerByOfficeType,
+  isBorderlineNplAccount,
+  isFallenNplAccount,
+  isWorstCategory,
+  normalizeContractNo,
 } from '../utils/recoveryEngine';
+import { PaymentPatternStrip } from './PaymentPatternStrip';
+import { UserAvatar } from './UserAvatar';
+import { WorstCaseProductBadge } from './WorstCaseProductBadge';
 
 interface AlertsNotificationsPanelProps {
-  contracts: TrackedContract[];
+  aersRecords: AersRecord[];
+  mrpMap?: Map<string, MrpEnrichment>;
   prefs: NotificationPreferences;
   permissionState: NotificationPermission | 'unsupported';
   onUpdatePrefs: (next: NotificationPreferences) => void;
   onRequestPermission: () => void;
   onTestPopup: () => void;
-  onLogVisit: (contract: TrackedContract) => void;
 }
 
 export function AlertsNotificationsPanel({
-  contracts,
+  aersRecords,
+  mrpMap,
   prefs,
   permissionState,
   onUpdatePrefs,
   onRequestPermission,
   onTestPopup,
-  onLogVisit,
 }: AlertsNotificationsPanelProps) {
-  const digest = buildRecoveryAlertDigest(contracts);
   const daysTo30th = getDaysRemainingTo30th();
+
+  const {
+    dpd91Danger,
+    zeroEffortBorderline,
+    newlySlippedNpl,
+    worstAccounts,
+  } = useMemo(() => {
+    const danger: AersRecord[] = [];
+    const zeroEff: AersRecord[] = [];
+    const slipped: AersRecord[] = [];
+    const worst: AersRecord[] = [];
+
+    for (const r of aersRecords) {
+      const isBorderline = isBorderlineNplAccount({
+        actualDpd: r.actualDpd,
+        opAge: r.opAge,
+        currentAge: r.currentAge,
+        monthEndForecastDpd: r.monthEndForecastDpd,
+        opNpl: r.opNpl,
+        npl: r.npl,
+        totalCollection: r.totalCollection,
+        lastPaidAmount: r.lastPaidAmount,
+      });
+
+      if (
+        (r.npl || 0) <= 0 &&
+        ((r.actualDpd >= 80 && r.actualDpd <= 90) ||
+          (r.monthEndForecastDpd >= 91 && r.actualDpd < 91))
+      ) {
+        danger.push(r);
+      }
+
+      if (isBorderline && (r.assignOfficerEfforts || 0) === 0) {
+        zeroEff.push(r);
+      }
+
+      if (isFallenNplAccount(r)) {
+        slipped.push(r);
+      }
+
+      if (isWorstCategory(r.nplReason, r.worstCaseProduct)) {
+        worst.push(r);
+      }
+    }
+
+    danger.sort((a, b) => (b.closingDebtor || 0) - (a.closingDebtor || 0));
+    zeroEff.sort((a, b) => (b.closingDebtor || 0) - (a.closingDebtor || 0));
+    slipped.sort((a, b) => (b.npl || b.closingDebtor || 0) - (a.npl || a.closingDebtor || 0));
+    worst.sort((a, b) => (b.npl || b.closingDebtor || 0) - (a.npl || a.closingDebtor || 0));
+
+    return {
+      dpd91Danger: danger,
+      zeroEffortBorderline: zeroEff,
+      newlySlippedNpl: slipped,
+      worstAccounts: worst,
+    };
+  }, [aersRecords]);
 
   const renderSection = (
     title: string,
     subtitle: string,
-    items: TrackedContract[],
+    items: AersRecord[],
     icon: React.ReactNode,
     emptyText: string,
+    showWorstBadge = false,
   ) => (
-    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden flex flex-col">
       <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 min-w-0">
           {icon}
-          <div>
+          <div className="min-w-0">
             <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              {title} ({items.length})
+              {title}{' '}
+              <span className="font-mono text-xs text-slate-500 dark:text-slate-400">
+                ({items.length})
+              </span>
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400">{subtitle}</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+              {subtitle}
+            </p>
           </div>
         </div>
       </div>
@@ -64,34 +135,60 @@ export function AlertsNotificationsPanel({
           {emptyText}
         </div>
       ) : (
-        <div className="divide-y divide-slate-200 dark:divide-slate-800">
-          {items.map((c) => (
-            <div
-              key={c.contractNo}
-              className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs"
-            >
-              <div>
-                <div className="font-mono font-semibold text-slate-900 dark:text-slate-100">
-                  {c.contractNo} · {c.vehicleNo || 'No Vehicle'}
+        <div className="divide-y divide-slate-200 dark:divide-slate-800 max-h-96 overflow-y-auto">
+          {items.slice(0, 40).map((r) => {
+            const officer = getOfficerByOfficeType(r);
+            return (
+              <div
+                key={r.contractNo}
+                className="p-3.5 flex items-center justify-between gap-3 text-xs hover:bg-slate-50/70 dark:hover:bg-slate-800/40"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <UserAvatar name={officer} sizeClass="w-8 h-8 text-xs" />
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                        {r.contractNo}
+                      </span>
+                      {showWorstBadge && (
+                        <WorstCaseProductBadge
+                          product={r.worstCaseProduct}
+                          nplReason={r.nplReason}
+                          compact
+                        />
+                      )}
+                    </div>
+                    <div className="text-slate-700 dark:text-slate-200 truncate">
+                      {r.cusName} · <span className="font-medium">{officer}</span>
+                    </div>
+                    <PaymentPatternStrip
+                      mrp={mrpMap?.get(normalizeContractNo(r.contractNo))}
+                      lastPaidAmount={r.lastPaidAmount}
+                      lastPayDate={r.lastPayDate}
+                      totalCollection={r.totalCollection}
+                      compact={true}
+                    />
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 tabular-nums font-mono">
+                      Age {(r.opAge || 0).toFixed(2)} → {(r.currentAge || 0).toFixed(2)} · DPD {r.actualDpd} (Fcst {r.monthEndForecastDpd}) · Efforts: {r.assignOfficerEfforts || 0}/{r.totalEfforts || 0}
+                    </div>
+                  </div>
                 </div>
-                <div className="text-slate-700 dark:text-slate-200 mt-0.5">
-                  {c.cusName} · RO: {c.ro || c.recoveryOfficer || '—'}
-                </div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
-                  Debtor: {formatCurrencyRs(c.closingDebtor)} · DPD {c.actualDpd} (Fcst{' '}
-                  {c.monthEndForecastDpd}) · P/P: {c.ppDate || '—'} · H/O:{' '}
-                  {c.handOverDate || '—'}
+                <div className="text-right font-mono shrink-0 tabular-nums">
+                  <div className="font-semibold text-slate-900 dark:text-slate-100">
+                    {formatCompactRs(r.npl > 0 ? r.npl : r.closingDebtor)}
+                  </div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                    {r.npl > 0 ? 'NPL Exposure' : 'Closing Debtor'}
+                  </div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => onLogVisit(c)}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap shrink-0 self-start sm:self-center"
-              >
-                + Log Follow-Up
-              </button>
+            );
+          })}
+          {items.length > 40 && (
+            <div className="p-2.5 text-center text-[11px] font-mono text-slate-500 dark:text-slate-400 bg-slate-50/60 dark:bg-slate-950/40">
+              Showing top 40 of {items.length} contracts by exposure
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -106,7 +203,7 @@ export function AlertsNotificationsPanel({
               Browser &amp; PC Pop-up Notification Settings
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Triggers native desktop pop-up alerts on startup and hourly for Today&apos;s P/P Due, Broken P/P, 91 DPD Danger (within 4 days), and Pending Hand Overs.
+              Triggers native desktop pop-up alerts on startup and hourly directly from live AERS data for 91 DPD Crossing Danger, Zero-Effort Borderline, Newly Slipped NPL, and WORST (W) accounts.
             </p>
             <p className="mt-2 text-xs font-mono text-slate-600 dark:text-slate-300">
               Browser Permission: <span className="font-semibold">{permissionState}</span>
@@ -184,35 +281,36 @@ export function AlertsNotificationsPanel({
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {renderSection(
-          "Today's P/P Due",
-          'Contracts with Promise to Pay scheduled for today',
-          digest.todayPp,
-          <CalendarCheck className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />,
-          'No Promise to Pay dates due today.',
-        )}
-
-        {renderSection(
-          'Broken P/P Alerts',
-          'P/P Date has passed and Last Pay Date is older than Visit Date',
-          digest.brokenPp,
-          <AlertOctagon className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />,
-          'No broken Promises to Pay detected.',
-        )}
-
-        {renderSection(
-          '91 DPD Danger Alert',
-          `Within 4 days of crossing 91 DPD (${daysTo30th}d remaining to 30th)`,
-          digest.dpd91Danger,
+          '91 DPD Crossing Danger',
+          `Pre-NPL contracts forecasting ≥91 DPD before cutoff (${daysTo30th}d left)`,
+          dpd91Danger,
           <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />,
-          'No tracked contracts within the 4-day 91 DPD threshold.',
+          'No contracts currently in the immediate 91 DPD crossing danger zone.',
         )}
 
         {renderSection(
-          'Pending Hand Overs',
-          'Contracts where Hand Over Date is today or overdue',
-          digest.pendingHandOver,
-          <Truck className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" />,
-          'No pending vehicle hand overs due.',
+          'Zero-Effort Borderline Accounts',
+          'Borderline accounts with 0 assigned officer efforts logged in AERS',
+          zeroEffortBorderline,
+          <PhoneOff className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />,
+          'All borderline contracts have at least one officer effort logged.',
+        )}
+
+        {renderSection(
+          'Newly Slipped NPL',
+          'Contracts that opened non-NPL and crossed into NPL this cycle',
+          newlySlippedNpl,
+          <AlertOctagon className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />,
+          'No newly slipped NPL contracts detected.',
+        )}
+
+        {renderSection(
+          'WORST (W) Priority Radar',
+          'Classified Worst Case (W) accounts requiring immediate recovery intervention',
+          worstAccounts,
+          <Flame className="w-4 h-4 text-orange-600 dark:text-orange-400 shrink-0" />,
+          'No WORST (W) contracts in current filter scope.',
+          true,
         )}
       </div>
     </div>

@@ -183,7 +183,7 @@ export function AdminLoginModal({
                   className="w-full px-3.5 py-2.5 text-sm font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600"
                 />
                 <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-                  Unlock Admin mode to upload daily AERS reports, edit watchlist contracts, and publish live updates to all users.
+                  Unlock Admin mode to upload daily AERS reports, manage Assign User rosters, and publish live updates to all users.
                 </p>
               </div>
 
@@ -274,7 +274,7 @@ export function AdminLoginModal({
                   Total App Reset (Clear All Data)
                 </div>
                 <p className="text-xs text-red-700/90 dark:text-red-300/90 leading-relaxed">
-                  This clears all Active Watchlist contracts, Visit History Logs, AERS Master Lookup data, Opening Baseline, and Monthly Snapshots from WG Pulse.
+                  This clears all AERS Master Lookup data, Assign User Follow-Up rosters, Opening Baseline, and Daily/Monthly Snapshots from WG Pulse.
                 </p>
                 <label className="flex items-start gap-2 text-xs text-slate-800 dark:text-slate-200 cursor-pointer">
                   <input

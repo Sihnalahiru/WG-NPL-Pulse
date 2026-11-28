@@ -3,25 +3,27 @@ import {
   Activity,
   ArrowUpDown,
   Building2,
+  Layers,
   Search,
   UserCheck,
 } from 'lucide-react';
 import officerFieldEffortsImg from '../assets/images/officer_field_efforts_1795684834158.jpg';
 import type {
+  AersMetadata,
   AersRecord,
   MrpEnrichment,
-  TrackedContract,
 } from '../types/recovery';
 import {
+  computeAgeGroupEfforts,
   computeOfficerEffortSummary,
   formatCompactRs,
 } from '../utils/recoveryEngine';
+import { UserAvatar } from './UserAvatar';
 
 interface OfficerEffortSummaryPanelProps {
   aersRecords: AersRecord[];
-  trackedContracts: TrackedContract[];
+  aersMeta?: AersMetadata | null;
   mrpMap?: Map<string, MrpEnrichment>;
-  defaultScope?: 'aers' | 'tracked';
 }
 
 type SortKey =
@@ -34,30 +36,53 @@ type SortKey =
 
 export function OfficerEffortSummaryPanel({
   aersRecords,
-  trackedContracts,
+  aersMeta,
   mrpMap,
-  defaultScope,
 }: OfficerEffortSummaryPanelProps) {
-  const resolvedDefaultScope: 'aers' | 'tracked' =
-    defaultScope ?? (aersRecords.length > 0 ? 'aers' : 'tracked');
-  const [scope, setScope] = useState<'aers' | 'tracked'>(resolvedDefaultScope);
   const [riskFilter, setRiskFilter] = useState<'all' | 'borderline' | 'npl'>('all');
   const [officeFilter, setOfficeFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortKey>('assignOfficerEfforts');
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
 
-  const effectiveScope: 'aers' | 'tracked' =
-    scope === 'aers' && aersRecords.length === 0 ? 'tracked' : scope;
+  const ageGroupRows = useMemo(() => {
+    if (aersMeta?.bmBranchSnapshot?.ageGroupEfforts?.length) {
+      return aersMeta.bmBranchSnapshot.ageGroupEfforts;
+    }
+    return computeAgeGroupEfforts(aersRecords);
+  }, [aersMeta, aersRecords]);
+
+  const ageGroupTotals = useMemo(
+    () =>
+      ageGroupRows.reduce(
+        (acc, g) => ({
+          contracts: acc.contracts + g.count,
+          assignEfforts: acc.assignEfforts + g.assignOfficerEfforts,
+          totalEfforts: acc.totalEfforts + g.totalEfforts,
+          zeroEffortCount: acc.zeroEffortCount + g.zeroEffortCount,
+          closingDebtor: acc.closingDebtor + g.closingDebtor,
+          nplAmount: acc.nplAmount + g.nplAmount,
+        }),
+        {
+          contracts: 0,
+          assignEfforts: 0,
+          totalEfforts: 0,
+          zeroEffortCount: 0,
+          closingDebtor: 0,
+          nplAmount: 0,
+        },
+      ),
+    [ageGroupRows],
+  );
 
   const baseRows = useMemo(
     () =>
-      computeOfficerEffortSummary(aersRecords, trackedContracts, {
-        scope: effectiveScope,
+      computeOfficerEffortSummary(aersRecords, [], {
+        scope: 'aers',
         riskFilter,
         mrpMap,
       }),
-    [aersRecords, trackedContracts, effectiveScope, riskFilter, mrpMap],
+    [aersRecords, riskFilter, mrpMap],
   );
 
   const officeTypes = useMemo(() => {
@@ -137,7 +162,7 @@ export function OfficerEffortSummaryPanel({
 
   return (
     <section
-      aria-label="Officer Effort Summary on Borderline and NPL Accounts"
+      aria-label="Officer Effort Summary and Age-Group Breakdown"
       className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden"
     >
       <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 space-y-4">
@@ -146,7 +171,7 @@ export function OfficerEffortSummaryPanel({
             <div className="hidden sm:block w-24 h-14 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-950">
               <img
                 src={officerFieldEffortsImg}
-                alt="Field Officer Visit Efforts Telemetry Illustration"
+                alt="Officer Effort Analytics Illustration"
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover"
               />
@@ -155,11 +180,11 @@ export function OfficerEffortSummaryPanel({
               <div className="flex items-center gap-2">
                 <Activity className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
                 <h2 className="text-sm sm:text-base font-semibold text-slate-900 dark:text-slate-100">
-                  Officer Effort Summary (Borderline &amp; NPL Field Visits)
+                  Officer Effort Summary &amp; Age-Group Breakdown
                 </h2>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Aggregates <strong className="font-medium text-slate-700 dark:text-slate-300">Assign Officer Efforts</strong> and <strong className="font-medium text-slate-700 dark:text-slate-300">Total Efforts</strong> strictly across Borderline and Current NPL accounts, grouped by RO and Office Type.
+                Tracks <strong className="font-medium text-slate-700 dark:text-slate-300">Assign Officer Efforts</strong> and <strong className="font-medium text-slate-700 dark:text-slate-300">Total Efforts</strong> across Age Groups (≤1.00 to 6.00+) and by RO / Office Type.
               </p>
             </div>
           </div>
@@ -185,32 +210,97 @@ export function OfficerEffortSummaryPanel({
                 </button>
               ))}
             </div>
+          </div>
+        </div>
 
-            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-950 rounded-lg">
-              <button
-                type="button"
-                onClick={() => setScope('aers')}
-                disabled={aersRecords.length === 0}
-                className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 ${
-                  effectiveScope === 'aers'
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                AERS ({aersRecords.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setScope('tracked')}
-                className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                  effectiveScope === 'tracked'
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                Watchlist ({trackedContracts.length})
-              </button>
+        {/* Age-Group Wise Effort Breakdown */}
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Layers className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
+              <h3 className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                Age-Group Wise Effort Breakdown (වයස් කාණ්ඩ අනුව උත්සාහයන්)
+              </h3>
             </div>
+            <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400 tabular-nums">
+              {ageGroupTotals.contracts.toLocaleString()} accts ·{' '}
+              {ageGroupTotals.assignEfforts.toLocaleString()} Assign /{' '}
+              {ageGroupTotals.totalEfforts.toLocaleString()} Total Efforts
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                  <th className="py-2 px-4">Age Group</th>
+                  <th className="py-2 px-3 text-right">Contracts</th>
+                  <th className="py-2 px-3 text-right">Assign Efforts</th>
+                  <th className="py-2 px-3 text-right">Total Efforts</th>
+                  <th className="py-2 px-3 text-right">Avg / Acct</th>
+                  <th className="py-2 px-3 text-right">0-Effort Accts</th>
+                  <th className="py-2 px-3 text-right">Closing Debtor</th>
+                  <th className="py-2 px-4 text-right">NPL Exposure</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800/70 tabular-nums">
+                {ageGroupRows.map((g) => (
+                  <tr
+                    key={g.key}
+                    className="hover:bg-white/80 dark:hover:bg-slate-900/60"
+                  >
+                    <td className="py-2 px-4 font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                      {g.label}
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono text-slate-700 dark:text-slate-300">
+                      {g.count.toLocaleString()}
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono font-bold text-blue-700 dark:text-blue-400">
+                      {g.assignOfficerEfforts.toLocaleString()}
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono font-semibold text-slate-900 dark:text-slate-100">
+                      {g.totalEfforts.toLocaleString()}
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono">
+                      <span
+                        className={
+                          g.avgAssignEfforts >= 2
+                            ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                            : g.avgAssignEfforts >= 1
+                              ? 'text-slate-900 dark:text-slate-100'
+                              : 'text-amber-700 dark:text-amber-400 font-semibold'
+                        }
+                      >
+                        {g.avgAssignEfforts.toFixed(1)}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono">
+                      {g.zeroEffortCount > 0 ? (
+                        <span className="inline-flex items-center px-1.5 py-0.5 text-[11px] font-semibold rounded bg-red-50 text-red-700 border border-red-200 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800">
+                          {g.zeroEffortCount.toLocaleString()}
+                        </span>
+                      ) : (
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                          0
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 px-3 text-right font-mono text-slate-700 dark:text-slate-300">
+                      {formatCompactRs(g.closingDebtor)}
+                    </td>
+                    <td
+                      className={`py-2 px-4 text-right font-mono font-semibold ${
+                        g.nplAmount > 0
+                          ? 'text-red-600 dark:text-red-400'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {formatCompactRs(g.nplAmount)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
 
@@ -245,7 +335,7 @@ export function OfficerEffortSummaryPanel({
               <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-900/60 text-emerald-800 dark:text-emerald-300">
                 <UserCheck className="w-3.5 h-3.5 shrink-0" />
                 <span>
-                  Top Visits: <strong>{topOfficer.ro}</strong> ({topOfficer.officeType}) ·{' '}
+                  Top Efforts: <strong>{topOfficer.ro}</strong> ({topOfficer.officeType}) ·{' '}
                   <span className="font-mono font-semibold">
                     {topOfficer.assignOfficerEfforts}
                   </span>
@@ -286,7 +376,7 @@ export function OfficerEffortSummaryPanel({
 
       {filteredAndSortedRows.length === 0 ? (
         <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
-          No Borderline or NPL effort records found. Upload an AERS/MRP workbook or add Borderline/NPL contracts to track RO field visit efforts.
+          No Borderline or NPL effort records found. Upload an AERS/MRP workbook to view officer effort metrics.
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -369,7 +459,10 @@ export function OfficerEffortSummaryPanel({
                     className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30"
                   >
                     <td className="py-2.5 px-4 font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                      {row.ro}
+                      <span className="inline-flex items-center gap-2">
+                        <UserAvatar name={row.ro} sizeClass="w-6 h-6 text-[10px]" />
+                        {row.ro}
+                      </span>
                     </td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300">

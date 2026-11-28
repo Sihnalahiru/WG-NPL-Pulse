@@ -26,9 +26,9 @@ import {
   Trash2,
 } from 'lucide-react';
 import type {
+  AersMetadata,
   AersRecord,
   MonthlySnapshot,
-  TrackedContract,
 } from '../types/recovery';
 import {
   formatCompactRs,
@@ -43,8 +43,8 @@ import {
 } from '../utils/recoveryEngine';
 
 interface AnalyticsChartsProps {
-  contracts: TrackedContract[];
-  aersRecords?: AersRecord[];
+  aersRecords: AersRecord[];
+  aersMeta?: AersMetadata | null;
   snapshots: MonthlySnapshot[];
   isDark: boolean;
   showSnapshotLedger?: boolean;
@@ -87,8 +87,8 @@ function describeDonutSegment(
 }
 
 export function AnalyticsCharts({
-  contracts,
   aersRecords = [],
+  aersMeta = null,
   snapshots,
   isDark,
   showSnapshotLedger = false,
@@ -100,12 +100,6 @@ export function AnalyticsCharts({
   const [editingSnapshot, setEditingSnapshot] =
     useState<MonthlySnapshot | null>(null);
   const [isAddingSnapshot, setIsAddingSnapshot] = useState(false);
-
-  const [savedScope, setSavedScope] = useState<'aers' | 'tracked'>(
-    aersRecords.length > 0 ? 'aers' : 'tracked',
-  );
-  const effectiveSavedScope: 'aers' | 'tracked' =
-    savedScope === 'aers' && aersRecords.length > 0 ? 'aers' : 'tracked';
 
   // Chart Type toggles for split Debtor & NPL cards
   const [debtorChartType, setDebtorChartType] = useState<'paired' | 'area'>('paired');
@@ -133,19 +127,7 @@ export function AnalyticsCharts({
   const tooltipBg = isDark ? '#0f172a' : '#ffffff';
   const tooltipBorder = isDark ? '#334155' : '#e2e8f0';
 
-  // Live Watchlist NPL Saved vs Fallen NPL calculation
-  const liveWatchlistSaved = contracts.filter((c) => isNplSavedAccount(c));
-  const liveWatchlistSavedAmt = liveWatchlistSaved.reduce(
-    (s, c) => s + getSavedNplCapitalValue(c),
-    0,
-  );
-  const liveWatchlistFallen = contracts.filter((c) => isFallenNplAccount(c));
-  const liveWatchlistFallenAmt = liveWatchlistFallen.reduce(
-    (s, c) => s + getCapitalNplExposure(c),
-    0,
-  );
-
-  // Live AERS NPL Saved vs Fallen NPL calculation (when AERS master is loaded)
+  // Live AERS NPL Saved vs Fallen NPL calculation
   const liveAersSaved = aersRecords.filter((r) =>
     isNplSavedAccount({
       opNpl: r.opNpl,
@@ -167,57 +149,34 @@ export function AnalyticsCharts({
     0,
   );
 
-  // Live Opening vs Closing portfolio metrics
-  const liveOpDebtorAmt =
-    effectiveSavedScope === 'aers'
-      ? aersRecords.reduce((s, r) => s + (r.opBalDebtor || 0), 0)
-      : contracts.reduce((s, c) => s + (c.opBalDebtor || 0), 0);
-
-  const liveClosingDebtorAmt =
-    effectiveSavedScope === 'aers'
-      ? aersRecords.reduce((s, r) => s + (r.closingDebtor || 0), 0)
-      : contracts.reduce((s, c) => s + (c.closingDebtor || 0), 0);
-
-  const liveOpNplAmt =
-    effectiveSavedScope === 'aers'
-      ? aersRecords.reduce((s, r) => s + (r.opNpl || 0), 0)
-      : contracts.reduce((s, c) => s + (c.opNpl || 0), 0);
-
-  const liveClosingNplAmt =
-    effectiveSavedScope === 'aers'
-      ? aersRecords.reduce((s, r) => s + (r.npl || 0), 0)
-      : contracts.reduce((s, c) => s + (c.npl || 0), 0);
+  // Live Opening vs Closing portfolio metrics (reconciled with BM Dashboard)
+  const liveOpDebtorAmt = aersRecords.reduce((s, r) => s + (r.opBalDebtor || 0), 0);
+  const liveClosingDebtorAmt = aersRecords.reduce((s, r) => s + (r.closingDebtor || 0), 0);
+  const liveOpNplAmt = aersRecords.reduce((s, r) => s + (r.opNpl || 0), 0);
+  const liveClosingNplAmt = aersRecords.reduce((s, r) => s + (r.npl || 0), 0);
 
   const debtorMovement = liveClosingDebtorAmt - liveOpDebtorAmt;
   const nplMovement = liveClosingNplAmt - liveOpNplAmt;
 
-  const activeSavedCount =
-    effectiveSavedScope === 'aers'
-      ? liveAersSaved.length
-      : liveWatchlistSaved.length;
-  const activeSavedAmt =
-    effectiveSavedScope === 'aers' ? liveAersSavedAmt : liveWatchlistSavedAmt;
-  const activeFallenCount =
-    effectiveSavedScope === 'aers'
-      ? liveAersFallen.length
-      : liveWatchlistFallen.length;
-  const activeFallenAmt =
-    effectiveSavedScope === 'aers'
-      ? liveAersFallenAmt
-      : liveWatchlistFallenAmt;
+  const activeSavedCount = liveAersSaved.length;
+  const activeSavedAmt = liveAersSavedAmt;
+  const activeFallenCount = liveAersFallen.length;
+  const activeFallenAmt = liveAersFallenAmt;
 
   // Trend Data with BOTH Opening and Closing values
   const trendChartData =
     snapshots.length > 0
       ? snapshots.map((s, idx) => {
           const isLast = idx === snapshots.length - 1;
-          const hasLive =
-            effectiveSavedScope === 'aers'
-              ? aersRecords.length > 0
-              : contracts.length > 0;
+          const hasLive = aersRecords.length > 0;
           const opDebtor = isLast && hasLive && liveOpDebtorAmt > 0 ? liveOpDebtorAmt : s.trackedDebtor * 1.03;
           const closingDebtor = isLast && hasLive ? liveClosingDebtorAmt : s.trackedDebtor;
-          const opNpl = isLast && hasLive && liveOpNplAmt > 0 ? liveOpNplAmt : s.trackedNpl * 1.15;
+          const opNpl =
+            s.openingNpl && s.openingNpl > 0
+              ? s.openingNpl
+              : isLast && hasLive && liveOpNplAmt > 0
+                ? liveOpNplAmt
+                : s.trackedNpl * 1.15;
           const closingNpl = isLast && hasLive ? liveClosingNplAmt : s.trackedNpl;
           const savedAmt = isLast && hasLive ? activeSavedAmt : s.nplSavedAmount;
           const fallenAmt = isLast && hasLive ? activeFallenAmt : s.newNplAmount;
@@ -234,7 +193,7 @@ export function AnalyticsCharts({
             collectionPct: s.collectionPct,
           };
         })
-      : contracts.length > 0 || aersRecords.length > 0
+      : aersRecords.length > 0
         ? [
             {
               label: 'Opening 1st',
@@ -314,27 +273,39 @@ export function AnalyticsCharts({
       now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
     );
     setFormDate(getTodayISO());
-    setFormDebtor(String(liveClosingDebtorAmt));
-    setFormNpl(String(liveClosingNplAmt));
-    setFormSaved(String(liveWatchlistSavedAmt));
-    setFormNewNpl(String(liveWatchlistFallenAmt));
-    setFormCollPct('82');
+    setFormDebtor(String(Math.round(liveClosingDebtorAmt)));
+    setFormNpl(String(Math.round(liveClosingNplAmt)));
+    setFormSaved(String(Math.round(liveAersSavedAmt)));
+    setFormNewNpl(String(Math.round(liveAersFallenAmt)));
+    const bmRatio = aersMeta?.bmBranchSnapshot?.ratio90Pct;
+    setFormCollPct(String(bmRatio !== undefined ? Math.round(bmRatio) : 80));
   };
 
   const handleSaveSnapshotForm = (e: React.FormEvent) => {
     e.preventDefault();
+    const bm = aersMeta?.bmBranchSnapshot;
     const payload: MonthlySnapshot = {
       id: editingSnapshot ? editingSnapshot.id : `snap_${Date.now()}`,
       label: formLabel.trim() || formDate.slice(5),
       snapshotDate: formDate || getTodayISO(),
-      trackedCount: editingSnapshot?.trackedCount ?? contracts.length,
+      uploadedAt: new Date().toISOString(),
+      trackedCount: editingSnapshot?.trackedCount ?? aersRecords.length,
       trackedDebtor: Number(formDebtor) || 0,
+      openingNpl: editingSnapshot?.openingNpl ?? liveOpNplAmt,
+      openingNplCount:
+        editingSnapshot?.openingNplCount ??
+        aersRecords.filter((r) => (r.opNpl || 0) > 0).length,
       trackedNpl: Number(formNpl) || 0,
+      closingNplCount:
+        editingSnapshot?.closingNplCount ??
+        aersRecords.filter((r) => (r.npl || 0) > 0).length,
       nplSavedAmount: Number(formSaved) || 0,
-      nplSavedCount: editingSnapshot?.nplSavedCount ?? liveWatchlistSaved.length,
+      nplSavedCount: editingSnapshot?.nplSavedCount ?? liveAersSaved.length,
       newNplAmount: Number(formNewNpl) || 0,
-      fallenNplCount:
-        editingSnapshot?.fallenNplCount ?? liveWatchlistFallen.length,
+      fallenNplCount: editingSnapshot?.fallenNplCount ?? liveAersFallen.length,
+      belowOneCount: editingSnapshot?.belowOneCount ?? bm?.belowOneCount,
+      totalPortfolioCount: editingSnapshot?.totalPortfolioCount ?? bm?.totalContracts,
+      ratio90Pct: editingSnapshot?.ratio90Pct ?? bm?.ratio90Pct,
       collectionPct: Number(formCollPct) || 0,
       sourceFile: editingSnapshot?.sourceFile ?? 'Manual Entry',
     };
@@ -350,7 +321,7 @@ export function AnalyticsCharts({
 
   const netSavedVsFallen = activeSavedAmt - activeFallenAmt;
 
-  // Borderline vs. Classified NPL Calculations
+  // Borderline vs. Classified NPL Calculations (Direct AERS)
   const aersClassified = aersRecords.filter((r) =>
     isCurrentNplAccount({ npl: r.npl, actualDpd: r.actualDpd }),
   );
@@ -375,30 +346,10 @@ export function AnalyticsCharts({
     0,
   );
 
-  const trackedClassified = contracts.filter((c) => isCurrentNplAccount(c));
-  const trackedClassifiedAmt = trackedClassified.reduce(
-    (s, c) => s + getCapitalNplExposure(c),
-    0,
-  );
-  const trackedBorderline = contracts.filter((c) =>
-    isBorderlineNplAccount(c, c.mrp),
-  );
-  const trackedBorderlineAmt = trackedBorderline.reduce(
-    (s, c) => s + getCapitalNplExposure(c),
-    0,
-  );
-
-  const activeClassified =
-    effectiveSavedScope === 'aers' ? aersClassified : trackedClassified;
-  const activeClassifiedCount = activeClassified.length;
-  const activeClassifiedAmt =
-    effectiveSavedScope === 'aers' ? aersClassifiedAmt : trackedClassifiedAmt;
-
-  const activeBorderline =
-    effectiveSavedScope === 'aers' ? aersBorderline : trackedBorderline;
-  const activeBorderlineCount = activeBorderline.length;
-  const activeBorderlineAmt =
-    effectiveSavedScope === 'aers' ? aersBorderlineAmt : trackedBorderlineAmt;
+  const activeClassifiedCount = aersClassified.length;
+  const activeClassifiedAmt = aersClassifiedAmt;
+  const activeBorderlineCount = aersBorderline.length;
+  const activeBorderlineAmt = aersBorderlineAmt;
 
   const totalRiskExposure = activeClassifiedAmt + activeBorderlineAmt;
   const totalRiskCount = activeClassifiedCount + activeBorderlineCount;
@@ -433,7 +384,7 @@ export function AnalyticsCharts({
   const classifiedStartAngle = borderlineEndAngle + 6;
   const classifiedEndAngle = classifiedStartAngle + classifiedSpan;
 
-  const sourceRecords = effectiveSavedScope === 'aers' ? aersRecords : contracts;
+  const sourceRecords = aersRecords;
 
   const tier60_75 = sourceRecords.filter((r) => {
     const dpd = r.actualDpd || 0;
@@ -573,7 +524,6 @@ export function AnalyticsCharts({
     const text = milestoneTexts[index % milestoneTexts.length];
     return (
       <g key={`milestone_${index}`}>
-        <circle cx={cx} cy={cy} r={12} fill="#10b981" opacity={0.2} className="animate-ping" />
         <circle cx={cx} cy={cy} r={5} fill="#10b981" stroke="#ffffff" strokeWidth={2} />
         <text
           x={cx}
@@ -641,7 +591,7 @@ export function AnalyticsCharts({
             <div className="h-52 w-full">
               {trendChartData.length === 0 ? (
                 <div className="h-full flex items-center justify-center text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl px-4">
-                  No debtor data yet. Upload an AERS Excel file or add tracked contracts.
+                  No debtor data yet. Upload an AERS Excel file to populate portfolio trends.
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -872,7 +822,7 @@ export function AnalyticsCharts({
             <div className="h-52 w-full">
               {trendChartData.length === 0 ? (
                 <div className="h-full flex items-center justify-center text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl px-4">
-                  No NPL data yet. Upload an AERS Excel file or add tracked contracts.
+                  No NPL data yet. Upload an AERS Excel file to populate NPL progression.
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -1083,35 +1033,9 @@ export function AnalyticsCharts({
                   NPL Saved vs. Fallen (Target Gauge)
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Executive Recovery Gauge against Monthly Branch Target
+                  Executive Recovery Gauge against Monthly Branch Target · Direct AERS Master
                 </p>
               </div>
-              {aersRecords.length > 0 && (
-                <div className="inline-flex items-center gap-0.5 p-0.5 bg-slate-100 dark:bg-slate-950 rounded-md shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setSavedScope('aers')}
-                    className={`px-2 py-0.5 text-[10px] font-medium rounded whitespace-nowrap ${
-                      effectiveSavedScope === 'aers'
-                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                        : 'text-slate-500 dark:text-slate-400'
-                    }`}
-                  >
-                    AERS
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSavedScope('tracked')}
-                    className={`px-2 py-0.5 text-[10px] font-medium rounded whitespace-nowrap ${
-                      effectiveSavedScope === 'tracked'
-                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                        : 'text-slate-500 dark:text-slate-400'
-                    }`}
-                  >
-                    Watchlist
-                  </button>
-                </div>
-              )}
             </div>
 
             {/* Target Amount Quick Selector */}
@@ -1464,17 +1388,15 @@ export function AnalyticsCharts({
 
                 <div className="mt-1 flex items-center justify-center">
                   {classifiedPct >= 60 ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
-                      <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse" />
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-md bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
                       CRITICAL 91+ DOMINANT ({classifiedPct}%)
                     </span>
                   ) : borderlinePct >= 50 ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-600 animate-pulse" />
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-md bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
                       ELEVATED BORDERLINE EXPOSURE ({borderlinePct}%)
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-800 dark:bg-slate-800/80 dark:text-slate-300">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-md bg-slate-100 text-slate-800 dark:bg-slate-800/80 dark:text-slate-300">
                       BALANCED RISK POSTURE
                     </span>
                   )}
@@ -1598,14 +1520,6 @@ export function AnalyticsCharts({
                         strokeWidth="1.5"
                         className="filter drop-shadow"
                       />
-                      <circle
-                        cx={doughnutCx}
-                        cy={doughnutCy - doughnutROuter - 8}
-                        r="7"
-                        fill="#f43f5e"
-                        opacity="0.3"
-                        className="animate-ping"
-                      />
                     </g>
                   </svg>
 
@@ -1663,17 +1577,15 @@ export function AnalyticsCharts({
 
                 <div className="mt-0.5 flex items-center justify-center">
                   {classifiedPct >= 60 ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
-                      <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse" />
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-md bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
                       CRITICAL 91+ DOMINANT ({classifiedPct}%)
                     </span>
                   ) : borderlinePct >= 50 ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-600 animate-pulse" />
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-md bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
                       ELEVATED BORDERLINE EXPOSURE ({borderlinePct}%)
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-800 dark:bg-slate-800/80 dark:text-slate-300">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[10px] font-bold rounded-md bg-slate-100 text-slate-800 dark:bg-slate-800/80 dark:text-slate-300">
                       BALANCED RISK POSTURE
                     </span>
                   )}
@@ -1693,10 +1605,7 @@ export function AnalyticsCharts({
                 }`}
               >
                 <div className="flex items-center justify-between text-[10px] text-amber-800 dark:text-amber-300 mb-0.5">
-                  <span className="font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                    Borderline (2.01–2.99)
-                  </span>
+                  <span className="font-semibold">Borderline (2.01–2.99)</span>
                   <span className="font-mono font-bold">{borderlinePct}%</span>
                 </div>
                 <div className="font-mono font-bold text-amber-900 dark:text-amber-200 text-sm">
@@ -1716,10 +1625,7 @@ export function AnalyticsCharts({
                 }`}
               >
                 <div className="flex items-center justify-between text-[10px] text-rose-800 dark:text-rose-300 mb-0.5">
-                  <span className="font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
-                    Classified NPL (3.00+)
-                  </span>
+                  <span className="font-semibold">Classified NPL (3.00+)</span>
                   <span className="font-mono font-bold">{classifiedPct}%</span>
                 </div>
                 <div className="font-mono font-bold text-rose-900 dark:text-rose-200 text-sm">
@@ -1762,10 +1668,10 @@ export function AnalyticsCharts({
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Monthly Snapshots Ledger (Nov 2026 – Mar 2027)
+                Daily &amp; Monthly Snapshots Ledger (Last Upload Locked Per Day)
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Automatically saved on AERS Excel upload or manually recorded for monthly progress tracking
+                Same-day AERS uploads update today&apos;s snapshot with the latest file; uploading on a new day locks the previous day&apos;s final upload and starts a new daily record.
               </p>
             </div>
 
@@ -1775,7 +1681,7 @@ export function AnalyticsCharts({
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-colors whitespace-nowrap shadow-sm"
             >
               <Plus className="w-3.5 h-3.5" />
-              Add Monthly Snapshot
+              Add Daily Snapshot
             </button>
           </div>
 
@@ -1785,7 +1691,7 @@ export function AnalyticsCharts({
               className="p-4 rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/50 dark:bg-emerald-950/20 space-y-4 text-xs"
             >
               <div className="font-semibold text-slate-900 dark:text-slate-100">
-                {editingSnapshot ? 'Edit Snapshot' : 'New Monthly Snapshot Entry'}
+                {editingSnapshot ? 'Edit Daily Snapshot' : 'New Daily Snapshot Entry'}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
                 <div>
@@ -1803,7 +1709,7 @@ export function AnalyticsCharts({
                 </div>
                 <div>
                   <label className="block text-[11px] text-slate-600 dark:text-slate-400 mb-1">
-                    Date
+                    Snapshot Date
                   </label>
                   <input
                     type="date"
@@ -1815,7 +1721,7 @@ export function AnalyticsCharts({
                 </div>
                 <div>
                   <label className="block text-[11px] text-slate-600 dark:text-slate-400 mb-1">
-                    Tracked Debtor (Rs.)
+                    Closing Debtor (Rs.)
                   </label>
                   <input
                     type="number"
@@ -1826,7 +1732,7 @@ export function AnalyticsCharts({
                 </div>
                 <div>
                   <label className="block text-[11px] text-slate-600 dark:text-slate-400 mb-1">
-                    Tracked NPL (Rs.)
+                    Closing NPL (Rs.)
                   </label>
                   <input
                     type="number"
@@ -1848,7 +1754,7 @@ export function AnalyticsCharts({
                 </div>
                 <div>
                   <label className="block text-[11px] text-slate-600 dark:text-slate-400 mb-1">
-                    Collection %
+                    Collection / 90 Ratio %
                   </label>
                   <input
                     type="number"
@@ -1882,19 +1788,19 @@ export function AnalyticsCharts({
 
           {snapshots.length === 0 ? (
             <div className="py-8 text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-              No saved snapshots yet. Upload an AERS workbook or click Add Monthly Snapshot above.
+              No saved snapshots yet. Upload an AERS workbook or click Add Daily Snapshot above.
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 font-semibold text-slate-500 dark:text-slate-400">
-                    <th className="py-2.5 px-4">Snapshot Label</th>
-                    <th className="py-2.5 px-3">Date</th>
-                    <th className="py-2.5 px-3 text-right">Tracked Debtor</th>
-                    <th className="py-2.5 px-3 text-right">Tracked NPL</th>
+                    <th className="py-2.5 px-4">Snapshot &amp; Last File</th>
+                    <th className="py-2.5 px-3">Date &amp; Time</th>
+                    <th className="py-2.5 px-3 text-right">Opening NPL</th>
+                    <th className="py-2.5 px-3 text-right">Closing NPL</th>
                     <th className="py-2.5 px-3 text-right">NPL Saved</th>
-                    <th className="py-2.5 px-3 text-right">Collection %</th>
+                    <th className="py-2.5 px-3 text-right">90 Ratio / Coll</th>
                     <th className="py-2.5 px-4 text-center">Actions</th>
                   </tr>
                 </thead>
@@ -1911,19 +1817,42 @@ export function AnalyticsCharts({
                         </span>
                       </td>
                       <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-300">
-                        {snap.snapshotDate}
+                        <div>{snap.snapshotDate}</div>
+                        {snap.uploadedAt && (
+                          <div className="text-[10px] text-slate-400 dark:text-slate-500">
+                            {new Date(snap.uploadedAt).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </div>
+                        )}
                       </td>
-                      <td className="py-2.5 px-3 text-right font-mono text-slate-900 dark:text-slate-100">
-                        {formatCurrencyRs(snap.trackedDebtor)}
+                      <td className="py-2.5 px-3 text-right font-mono text-slate-700 dark:text-slate-300">
+                        <div>{snap.openingNpl !== undefined ? formatCompactRs(snap.openingNpl) : '—'}</div>
+                        {snap.openingNplCount !== undefined && (
+                          <div className="text-[10px] text-slate-500">{snap.openingNplCount} accts</div>
+                        )}
                       </td>
-                      <td className="py-2.5 px-3 text-right font-mono text-rose-600 dark:text-rose-400">
-                        {formatCurrencyRs(snap.trackedNpl)}
+                      <td className="py-2.5 px-3 text-right font-mono text-rose-600 dark:text-rose-400 font-semibold">
+                        <div>{formatCompactRs(snap.trackedNpl)}</div>
+                        {snap.closingNplCount !== undefined && (
+                          <div className="text-[10px] text-rose-500/80">{snap.closingNplCount} accts</div>
+                        )}
                       </td>
-                      <td className="py-2.5 px-3 text-right font-mono text-emerald-600 dark:text-emerald-400">
-                        {formatCurrencyRs(snap.nplSavedAmount)}
+                      <td className="py-2.5 px-3 text-right font-mono text-emerald-600 dark:text-emerald-400 font-semibold">
+                        {formatCompactRs(snap.nplSavedAmount)}
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                        {snap.collectionPct}%
+                        {snap.ratio90Pct !== undefined ? (
+                          <div>
+                            <div>{snap.ratio90Pct.toFixed(1)}% (90R)</div>
+                            <div className="text-[10px] text-slate-500 font-normal">
+                              Coll {snap.collectionPct}%
+                            </div>
+                          </div>
+                        ) : (
+                          `${snap.collectionPct}%`
+                        )}
                       </td>
                       <td className="py-2.5 px-4 text-center">
                         <div className="inline-flex items-center gap-1.5">

@@ -19,6 +19,8 @@ export type FilterPreset =
 
 export type NavSection =
   | 'overview'
+  | 'assign_user'
+  | 'below_one'
   | 'borderline'
   | 'worst'
   | 'tools'
@@ -66,6 +68,37 @@ export interface AersRecord {
   assignOfficerEfforts: number;
 }
 
+export interface AgeGroupEffortRow {
+  key: 'below_1' | 'age_1_2' | 'age_2_3' | 'age_3_6' | 'age_6_plus';
+  label: string;
+  shortLabel: string;
+  count: number;
+  assignOfficerEfforts: number;
+  totalEfforts: number;
+  zeroEffortCount: number;
+  avgAssignEfforts: number;
+  closingDebtor: number;
+  nplAmount: number;
+}
+
+export interface BelowOneQuickWinItem {
+  contractNo: string;
+  cusName: string;
+  officer: string;
+  officeType: string;
+  opAge: number;
+  currentAge: number;
+  excessAge: number;
+  actualDpd: number;
+  closingDebtor: number;
+  currentMonthDue: number;
+  totalCollection: number;
+  assignOfficerEfforts: number;
+  totalEfforts: number;
+  lastPayDate: string;
+  lastPaidAmount: number;
+}
+
 export interface AersMetadata {
   fileName: string;
   printedDateTime: string;
@@ -77,6 +110,15 @@ export interface AersMetadata {
     ageBuckets: BmAgeBucketDatum[];
     roPerformance: BmOfficerPerformanceRow[];
     moPerformance: BmOfficerPerformanceRow[];
+    ageGroupEfforts?: AgeGroupEffortRow[];
+    belowOneQuickWins?: BelowOneQuickWinItem[];
+    totalContracts?: number;
+    belowOneCount?: number;
+    ratio90Pct?: number;
+    openingNplCount?: number;
+    closingNplCount?: number;
+    totalOpNpl?: number;
+    totalClosingNpl?: number;
   };
 }
 
@@ -175,9 +217,16 @@ export interface MonthlySnapshot {
   label: string;
   monthKey?: string;
   snapshotDate: string;
+  uploadedAt?: string;
   trackedCount: number;
   trackedDebtor: number;
   trackedNpl: number;
+  openingNpl?: number;
+  openingNplCount?: number;
+  closingNplCount?: number;
+  belowOneCount?: number;
+  totalPortfolioCount?: number;
+  ratio90Pct?: number;
   nplSavedAmount: number;
   nplSavedCount: number;
   newNplAmount: number;
@@ -394,12 +443,15 @@ export interface BmOfficerPerformanceRow {
   totalCollection: number;
   collectionEfficiencyPct: number;
   opNpl: number;
+  openingNplCount?: number;
   closingNpl: number;
+  closingNplCount?: number;
   netNplVariance: number;
   closingDebtor: number;
   belowOneCount: number;
   opBelowOneCount: number;
   belowOneRetentionPct: number;
+  ratio90Pct?: number;
 }
 
 export interface OfficerEffortSummaryRow {

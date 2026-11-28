@@ -3,6 +3,8 @@ import type {
   AersMetadata,
   AersRecord,
   AgeBucketDatum,
+  AgeGroupEffortRow,
+  BelowOneQuickWinItem,
   BmAgeBucketDatum,
   BmOfficerPerformanceRow,
   BorderlineAccountItem,
@@ -338,12 +340,12 @@ export function isEligibleNplOrBorderline(
 ): boolean {
   const mrp = mrpOverride ?? rec.mrp;
   if (
-    (rec.opAge || 0) < 2.0 &&
-    (rec.currentAge || 0) < 2.0 &&
+    (rec.opAge || 0) <= 1.0 &&
+    (rec.currentAge || 0) <= 1.0 &&
     (rec.npl || 0) === 0 &&
     (rec.opNpl || 0) === 0 &&
     (rec.monthEndForecastDpd || 0) < 80 &&
-    (rec.actualDpd || 0) < 61 &&
+    (rec.actualDpd || 0) < 31 &&
     !mrp?.borderNpl
   ) {
     return false;
@@ -351,11 +353,10 @@ export function isEligibleNplOrBorderline(
 
   return (
     (rec.npl || 0) > 0 ||
-    (rec.actualDpd || 0) >= 61 ||
-    (rec.opAge || 0) >= 3.0 ||
     (rec.opNpl || 0) > 0 ||
+    (rec.currentAge || 0) > 1.0 ||
     (rec.opAge || 0) >= 2.01 ||
-    (rec.currentAge || 0) >= 2.01 ||
+    (rec.actualDpd || 0) >= 61 ||
     (rec.monthEndForecastDpd || 0) >= 80 ||
     Boolean(mrp?.borderNpl)
   );
@@ -895,10 +896,29 @@ function applyStrictNplUniverseFilter(
   watchlistImports?: Sheet2WatchlistRow[],
 ): ParsedAersResult {
   const allRecords = baseResult.records;
+  const ageBuckets = computeBmAgeBuckets(allRecords, []);
+  const totalContracts = allRecords.length;
+  const belowOneCount = allRecords.filter((r) => (r.currentAge || 0) <= 1.0).length;
+  const ratio90Pct =
+    totalContracts > 0 ? Math.round((belowOneCount / totalContracts) * 1000) / 10 : 0;
+  const openingNplCount = allRecords.filter((r) => (r.opNpl || 0) > 0).length;
+  const closingNplCount = allRecords.filter((r) => (r.npl || 0) > 0).length;
+  const totalOpNpl = allRecords.reduce((s, r) => s + (r.opNpl || 0), 0);
+  const totalClosingNpl = allRecords.reduce((s, r) => s + (r.npl || 0), 0);
+
   const bmBranchSnapshot = {
-    ageBuckets: computeBmAgeBuckets(allRecords, []),
+    ageBuckets,
     roPerformance: computeBmOfficerPerformance(allRecords, [], 'RO'),
     moPerformance: computeBmOfficerPerformance(allRecords, [], 'MO'),
+    ageGroupEfforts: computeAgeGroupEfforts(allRecords),
+    belowOneQuickWins: extractBelowOneQuickWins(allRecords),
+    totalContracts,
+    belowOneCount,
+    ratio90Pct,
+    openingNplCount,
+    closingNplCount,
+    totalOpNpl,
+    totalClosingNpl,
   };
 
   const eligibleRecords: AersRecord[] = [];
@@ -1832,9 +1852,9 @@ export function buildOpeningOfficerBaseline(
       };
     }
     byOfficer[key].openingCount += 1;
-    byOfficer[key].openingDebtor += r.opBalDebtor || r.closingDebtor || 0;
-    byOfficer[key].openingNpl += r.opNpl || r.npl || 0;
-    if (r.opNpl > 0 || r.actualDpd >= 91 || r.npl > 0) {
+    byOfficer[key].openingDebtor += r.opBalDebtor || 0;
+    byOfficer[key].openingNpl += r.opNpl || 0;
+    if ((r.opNpl || 0) > 0) {
       byOfficer[key].openingNplCount += 1;
     }
   }
@@ -2183,14 +2203,14 @@ export function computeOfficerOpeningClosing(
     row.openingCount += 1;
     row.openingDebtor += item.opBalDebtor;
     row.openingNpl += item.opNpl;
-    if (item.opNpl > 0 || item.opAge >= 3.0) {
+    if (item.opNpl > 0) {
       row.openingNplCount += 1;
     }
 
     row.closingCount += 1;
     row.closingDebtor += item.closingDebtor;
     row.closingNpl += item.npl;
-    if (item.npl > 0 || item.actualDpd >= 91) {
+    if (item.npl > 0) {
       row.closingNplCount += 1;
     }
 
@@ -2242,7 +2262,14 @@ export function computeOfficerOpeningClosing(
   if (openingBaseline && items.length > 0) {
     for (const [officerKey, base] of Object.entries(openingBaseline.byOfficer)) {
       const row = byOfficer.get(officerKey);
-      if (row && base.openingDebtor > 0 && items.length >= base.openingCount) {
+      // Only fall back to stored baseline when the AERS report rows lack OP_NPL values
+      if (
+        row &&
+        row.openingNpl === 0 &&
+        row.openingNplCount === 0 &&
+        base.openingNpl > 0 &&
+        items.length >= base.openingCount
+      ) {
         row.openingCount = base.openingCount;
         row.openingDebtor = base.openingDebtor;
         row.openingNpl = base.openingNpl;
@@ -2498,12 +2525,15 @@ export function computeBmOfficerPerformance(
         totalCollection: 0,
         collectionEfficiencyPct: 0,
         opNpl: 0,
+        openingNplCount: 0,
         closingNpl: 0,
+        closingNplCount: 0,
         netNplVariance: 0,
         closingDebtor: 0,
         belowOneCount: 0,
         opBelowOneCount: 0,
         belowOneRetentionPct: 0,
+        ratio90Pct: 0,
       };
       map.set(item.officer, row);
     }
@@ -2512,7 +2542,9 @@ export function computeBmOfficerPerformance(
     row.dueBudget += item.dueBudget;
     row.totalCollection += item.totalCollection;
     row.opNpl += item.opNpl;
+    if (item.opNpl > 0) row.openingNplCount = (row.openingNplCount || 0) + 1;
     row.closingNpl += item.closingNpl;
+    if (item.closingNpl > 0) row.closingNplCount = (row.closingNplCount || 0) + 1;
     row.closingDebtor += item.closingDebtor;
     if (item.currentAge <= 1.0) row.belowOneCount += 1;
     if (item.opAge <= 1.0) row.opBelowOneCount += 1;
@@ -2527,12 +2559,17 @@ export function computeBmOfficerPerformance(
     const denom = r.opBelowOneCount > 0 ? r.opBelowOneCount : r.totalCount;
     const belowOneRetentionPct =
       denom > 0 ? Math.round((r.belowOneCount / denom) * 1000) / 10 : 0;
+    const ratio90Pct =
+      r.totalCount > 0
+        ? Math.round((r.belowOneCount / r.totalCount) * 1000) / 10
+        : 0;
 
     return {
       ...r,
       collectionEfficiencyPct,
       netNplVariance,
       belowOneRetentionPct,
+      ratio90Pct,
     };
   });
 
@@ -2663,3 +2700,239 @@ export function computeOfficerEffortSummary(
 
   return rows;
 }
+
+export function computeAgeGroupEfforts(
+  records: AersRecord[],
+): AgeGroupEffortRow[] {
+  const groups: AgeGroupEffortRow[] = [
+    {
+      key: 'below_1',
+      label: 'Age ≤ 1.00 (Below 1 / Performing)',
+      shortLabel: '≤ 1.00',
+      count: 0,
+      assignOfficerEfforts: 0,
+      totalEfforts: 0,
+      zeroEffortCount: 0,
+      avgAssignEfforts: 0,
+      closingDebtor: 0,
+      nplAmount: 0,
+    },
+    {
+      key: 'age_1_2',
+      label: 'Age 1.01 – 1.99 (90-Ratio Quick Win)',
+      shortLabel: '1.01 – 1.99',
+      count: 0,
+      assignOfficerEfforts: 0,
+      totalEfforts: 0,
+      zeroEffortCount: 0,
+      avgAssignEfforts: 0,
+      closingDebtor: 0,
+      nplAmount: 0,
+    },
+    {
+      key: 'age_2_3',
+      label: 'Age 2.00 – 2.99 (Borderline 61–90 DPD)',
+      shortLabel: '2.00 – 2.99',
+      count: 0,
+      assignOfficerEfforts: 0,
+      totalEfforts: 0,
+      zeroEffortCount: 0,
+      avgAssignEfforts: 0,
+      closingDebtor: 0,
+      nplAmount: 0,
+    },
+    {
+      key: 'age_3_6',
+      label: 'Age 3.00 – 5.99 (Active NPL 91–180 DPD)',
+      shortLabel: '3.00 – 5.99',
+      count: 0,
+      assignOfficerEfforts: 0,
+      totalEfforts: 0,
+      zeroEffortCount: 0,
+      avgAssignEfforts: 0,
+      closingDebtor: 0,
+      nplAmount: 0,
+    },
+    {
+      key: 'age_6_plus',
+      label: 'Age 6.00+ (Hard NPL 180+ DPD)',
+      shortLabel: '6.00+',
+      count: 0,
+      assignOfficerEfforts: 0,
+      totalEfforts: 0,
+      zeroEffortCount: 0,
+      avgAssignEfforts: 0,
+      closingDebtor: 0,
+      nplAmount: 0,
+    },
+  ];
+
+  for (const r of records) {
+    const age = Number(r.currentAge) || 0;
+    let idx = 0;
+    if (age <= 1.0) idx = 0;
+    else if (age < 2.0) idx = 1;
+    else if (age < 3.0) idx = 2;
+    else if (age < 6.0) idx = 3;
+    else idx = 4;
+
+    const g = groups[idx];
+    const assignEff = Number(r.assignOfficerEfforts) || 0;
+    const totalEff = Number(r.totalEfforts) || 0;
+    g.count += 1;
+    g.assignOfficerEfforts += assignEff;
+    g.totalEfforts += totalEff;
+    if (assignEff <= 0) g.zeroEffortCount += 1;
+    g.closingDebtor += Number(r.closingDebtor) || 0;
+    g.nplAmount += Number(r.npl) || 0;
+  }
+
+  for (const g of groups) {
+    g.avgAssignEfforts =
+      g.count > 0 ? Math.round((g.assignOfficerEfforts / g.count) * 10) / 10 : 0;
+  }
+
+  return groups;
+}
+
+export function extractBelowOneQuickWins(
+  records: AersRecord[],
+): BelowOneQuickWinItem[] {
+  return records
+    .filter((r) => {
+      const age = Number(r.currentAge) || 0;
+      return age > 1.0 && age < 2.0;
+    })
+    .map((r) => {
+      const currentAge = Number(r.currentAge) || 0;
+      return {
+        contractNo: normalizeContractNo(r.contractNo),
+        cusName: r.cusName || 'Unnamed Client',
+        officer: getOfficerByOfficeType(r),
+        officeType: (r.officeType || 'RO').trim() || 'RO',
+        opAge: Number(r.opAge) || 0,
+        currentAge,
+        excessAge: Math.round((currentAge - 1.0) * 100) / 100,
+        actualDpd: Number(r.actualDpd) || 0,
+        closingDebtor: Number(r.closingDebtor) || 0,
+        currentMonthDue: Number(r.currentMonthDue || r.dueBudgetMonth) || 0,
+        totalCollection: Number(r.totalCollection) || 0,
+        assignOfficerEfforts: Number(r.assignOfficerEfforts) || 0,
+        totalEfforts: Number(r.totalEfforts) || 0,
+        lastPayDate: r.lastPayDate || '',
+        lastPaidAmount: Number(r.lastPaidAmount) || 0,
+      };
+    })
+    .sort(
+      (a, b) =>
+        a.currentAge - b.currentAge ||
+        a.closingDebtor - b.closingDebtor,
+    );
+}
+
+export function buildDailyAersSnapshot(
+  aersRecords: AersRecord[],
+  aersMeta: AersMetadata,
+): MonthlySnapshot {
+  const todayISO = getTodayISO();
+  const snapDate = todayISO;
+  const monthKey = snapDate.slice(0, 7);
+  const dateObj = new Date(`${snapDate}T00:00:00`);
+  const label = Number.isNaN(dateObj.getTime())
+    ? snapDate
+    : dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+  const bm = aersMeta.bmBranchSnapshot;
+  const openingNpl =
+    bm?.totalOpNpl ?? aersRecords.reduce((s, r) => s + (r.opNpl || 0), 0);
+  const openingNplCount =
+    bm?.openingNplCount ?? aersRecords.filter((r) => (r.opNpl || 0) > 0).length;
+  const closingNpl =
+    bm?.totalClosingNpl ?? aersRecords.reduce((s, r) => s + (r.npl || 0), 0);
+  const closingNplCount =
+    bm?.closingNplCount ?? aersRecords.filter((r) => (r.npl || 0) > 0).length;
+
+  const totalPortfolioCount =
+    bm?.totalContracts ??
+    (bm?.ageBuckets?.reduce((s, b) => s + b.count, 0) || aersRecords.length);
+  const belowOneCount =
+    bm?.belowOneCount ??
+    (bm?.ageBuckets
+      ? (bm.ageBuckets[0]?.count || 0) + (bm.ageBuckets[1]?.count || 0)
+      : aersRecords.filter((r) => (r.currentAge || 0) <= 1.0).length);
+  const ratio90Pct =
+    totalPortfolioCount > 0
+      ? Math.round((belowOneCount / totalPortfolioCount) * 1000) / 10
+      : 0;
+
+  const branchDebtor =
+    bm?.ageBuckets && bm.ageBuckets.length > 0
+      ? bm.ageBuckets.reduce((s, b) => s + (b.closingDebtor || 0), 0)
+      : aersRecords.reduce((s, r) => s + (r.closingDebtor || 0), 0);
+
+  let branchDue = 0;
+  let branchColl = 0;
+  if (bm && (bm.roPerformance.length > 0 || bm.moPerformance.length > 0)) {
+    const allOfficers = [...bm.roPerformance, ...bm.moPerformance];
+    branchDue = allOfficers.reduce((s, o) => s + (o.dueBudget || 0), 0);
+    branchColl = allOfficers.reduce((s, o) => s + (o.totalCollection || 0), 0);
+  } else {
+    for (const r of aersRecords) {
+      branchDue += r.dueBudgetMonth || r.currentMonthDue || 0;
+      branchColl += r.totalCollection || 0;
+    }
+  }
+  const branchCollectionPct =
+    branchDue > 0
+      ? Math.min(200, Math.round((branchColl / branchDue) * 1000) / 10)
+      : 0;
+
+  const savedRecs = aersRecords.filter((r) =>
+    isNplSavedAccount({
+      opNpl: r.opNpl,
+      opAge: r.opAge,
+      npl: r.npl,
+      actualDpd: r.actualDpd,
+      monthEndForecastDpd: r.monthEndForecastDpd,
+      totalCollection: r.totalCollection,
+      lastPaidAmount: r.lastPaidAmount,
+    }),
+  );
+  const nplSavedAmount = savedRecs.reduce(
+    (s, r) => s + getSavedNplCapitalValue(r),
+    0,
+  );
+  const fallenRecs = aersRecords.filter((r) => isFallenNplAccount(r));
+  const newNplAmount = fallenRecs.reduce(
+    (s, r) => s + getCapitalNplExposure(r),
+    0,
+  );
+
+  return {
+    id: `snap_${snapDate}`,
+    label,
+    monthKey,
+    snapshotDate: snapDate,
+    uploadedAt: new Date().toISOString(),
+    trackedCount: totalPortfolioCount,
+    trackedDebtor: branchDebtor,
+    trackedNpl: closingNpl,
+    openingNpl,
+    openingNplCount,
+    closingNplCount,
+    belowOneCount,
+    totalPortfolioCount,
+    ratio90Pct,
+    nplSavedAmount,
+    nplSavedCount: savedRecs.length,
+    newNplAmount,
+    fallenNplCount: fallenRecs.length,
+    collectionPct: branchCollectionPct,
+    branchCount: totalPortfolioCount,
+    branchDebtor,
+    branchNpl: closingNpl,
+    branchCollectionPct,
+    sourceFile: aersMeta.fileName,
+  };
+}
+

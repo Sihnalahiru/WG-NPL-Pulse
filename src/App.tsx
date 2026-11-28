@@ -4,7 +4,6 @@ import {
   BarChart3,
   Bell,
   BellRing,
-  Bot,
   Building2,
   CheckCircle2,
   ClipboardCheck,
@@ -15,25 +14,23 @@ import {
   Layers,
   LayoutDashboard,
   Lock,
-  MessageSquare,
   Moon,
-  Plus,
   RefreshCw,
   Settings,
   ShieldAlert,
   ShieldCheck,
   Sun,
+  Target,
   Upload,
   X,
 } from 'lucide-react';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { AersLookupPanel } from './components/AersLookupPanel';
-import { AiRecoveryAgentPanel } from './components/AiRecoveryAgentPanel';
 import { AlertsNotificationsPanel } from './components/AlertsNotificationsPanel';
 import { AnalyticsCharts } from './components/AnalyticsCharts';
 import { BackupSettingsPanel } from './components/BackupSettingsPanel';
+import { BelowOneRatioPanel } from './components/BelowOneRatioPanel';
 import { BmPortfolioAnalyticsPanel } from './components/BmPortfolioAnalyticsPanel';
-import { ContractModal } from './components/ContractModal';
 import { ExecutiveOfficerHubPanel } from './components/ExecutiveOfficerHubPanel';
 import strategyHeroImg from './assets/images/finance_strategy_hero_1795684833730.jpg';
 import { PulseLogoMark } from './components/FinanceIllustrations';
@@ -41,16 +38,12 @@ import { KpiStrip } from './components/KpiStrip';
 import { NextMonthBorderlineCardsPanel } from './components/NextMonthBorderlineCardsPanel';
 import { OfficeTypeBreakdownPanel } from './components/OfficeTypeBreakdownPanel';
 import { StaffFollowUpMonitorPanel } from './components/StaffFollowUpMonitorPanel';
-import { TrackingTable } from './components/TrackingTable';
 import { TrendsEvaluationPanel } from './components/TrendsEvaluationPanel';
-import { VisitHistoryModal } from './components/VisitHistoryModal';
-import { WhatsAppSyncModal } from './components/WhatsAppSyncModal';
 import { WorstCasePanel } from './components/WorstCasePanel';
 import type {
   AersMetadata,
   AersRecord,
   BackupPayload,
-  FilterPreset,
   MonthlySnapshot,
   MrpEnrichment,
   MrpPaymentMonth,
@@ -58,30 +51,24 @@ import type {
   NotificationPreferences,
   OpeningOfficerBaseline,
   StaffAssignedContract,
-  TrackedContract,
-  VisitLogEntry,
-  WhatsAppLocationMatch,
 } from './types/recovery';
 import {
   analyzeNextMonthBorderline,
+  buildDailyAersSnapshot,
   buildOpeningOfficerBaseline,
-  buildRecoveryAlertDigest,
   computeOfficeTypeBreakdown,
   formatCompactRs,
   getDaysRemainingTo30th,
   getMonth30thLabel,
   getOfficerByOfficeType,
   getTodayISO,
+  isBorderlineNplAccount,
+  isFallenNplAccount,
   isWorstCategory,
   normalizeContractNo,
   normalizeEvaluableFromAers,
-  normalizeEvaluableFromTracked,
-  normalizeVehicleNo,
-  parseAersPastedText,
   parseAersWorkbook,
   playAlertChime,
-  syncTrackedContractsWithAers,
-  triggerDesktopNotifications,
 } from './utils/recoveryEngine';
 import type { ParsedAersResult } from './utils/recoveryEngine';
 import {
@@ -101,6 +88,8 @@ const STORAGE_KEYS = {
   NOTIF_PREFS: 'wg_v2_notification_prefs',
   THEME: 'wg_v2_theme',
 };
+
+const EMPTY_STRING_SET = new Set<string>();
 
 interface DataShapeMismatch {
   source: string;
@@ -428,163 +417,6 @@ function sanitizeAersListWithReport(
 
 function sanitizeAersList(raw: unknown, source = 'aersRecords'): AersRecord[] {
   return sanitizeAersListWithReport(raw, source).data;
-}
-
-const TRACKED_STRING_FIELDS = [
-  'cusName',
-  'mobileNo',
-  'address',
-  'recoveryOfficer',
-  'marketingOfficer',
-  'lastPayDate',
-  'vehicleNo',
-  'visitDate',
-  'ppDate',
-  'handOverDate',
-  'remark',
-  'remarkBy',
-  'ro',
-  'locationUrl',
-  'addedAt',
-] as const;
-
-const TRACKED_NUMBER_FIELDS = [
-  'opAge',
-  'currentAge',
-  'closingDebtor',
-  'capitalOutstanding',
-  'opNpl',
-  'npl',
-  'actualDpd',
-  'monthEndForecastDpd',
-  'minAmountToReverseNpl',
-  'lastPaidAmount',
-  'nplSavedAmount',
-] as const;
-
-function sanitizeTrackedListWithReport(
-  raw: unknown,
-  source = 'trackedContracts',
-): SanitizeReport<TrackedContract[]> {
-  return runDataSanitizer<TrackedContract[]>(source, raw, [], (input, report) => {
-    if (!Array.isArray(input)) {
-      report({
-        field: '<root>',
-        expected: 'TrackedContract[]',
-        received: describeValueType(input),
-        action: 'fallback',
-        message: `Expected an array of tracked contracts, got ${describeValueType(input)}.`,
-      });
-      return [];
-    }
-
-    const result: TrackedContract[] = [];
-    input.forEach((item, index) => {
-      if (!isPlainObject(item)) {
-        report({
-          field: `[${index}]`,
-          expected: 'TrackedContract object',
-          received: describeValueType(item),
-          index,
-          action: 'dropped',
-          message: `Dropped malformed tracked contract at index ${index}.`,
-        });
-        return;
-      }
-
-      const rawContractNo = item.contractNo;
-      const contractNo =
-        typeof rawContractNo === 'string'
-          ? rawContractNo.trim()
-          : typeof rawContractNo === 'number' && Number.isFinite(rawContractNo)
-            ? String(rawContractNo)
-            : '';
-
-      if (!contractNo) {
-        report({
-          field: 'contractNo',
-          expected: 'non-empty string',
-          received: describeValueType(rawContractNo),
-          index,
-          action: 'dropped',
-          message: `Dropped tracked contract at index ${index} missing valid contractNo.`,
-        });
-        return;
-      }
-
-      const cleaned: Record<string, unknown> = { ...item, contractNo };
-      for (const field of TRACKED_STRING_FIELDS) {
-        cleaned[field] = coerceStringField(item, field, report, index, contractNo);
-      }
-      for (const field of TRACKED_NUMBER_FIELDS) {
-        cleaned[field] = coerceNumberField(item, field, report, index, contractNo);
-      }
-
-      // Sanitize visitHistory array
-      const rawHistory = item.visitHistory;
-      if (rawHistory === undefined || rawHistory === null) {
-        cleaned.visitHistory = [];
-      } else if (!Array.isArray(rawHistory)) {
-        report({
-          field: 'visitHistory',
-          expected: 'VisitLogEntry[]',
-          received: describeValueType(rawHistory),
-          index,
-          recordKey: contractNo,
-          action: 'coerced',
-          message: `Non-array visitHistory (${describeValueType(rawHistory)}); reset to [].`,
-        });
-        cleaned.visitHistory = [];
-      } else {
-        const cleanHistory: VisitLogEntry[] = [];
-        rawHistory.forEach((entry, hIdx) => {
-          if (!isPlainObject(entry)) {
-            report({
-              field: `visitHistory[${hIdx}]`,
-              expected: 'VisitLogEntry object',
-              received: describeValueType(entry),
-              index,
-              recordKey: contractNo,
-              action: 'dropped',
-              message: 'Dropped non-object entry in visitHistory.',
-            });
-            return;
-          }
-          cleanHistory.push(entry as unknown as VisitLogEntry);
-        });
-        cleaned.visitHistory = cleanHistory;
-      }
-
-      // Sanitize optional mrp enrichment
-      if (item.mrp === undefined || item.mrp === null) {
-        cleaned.mrp = undefined;
-      } else if (!isPlainObject(item.mrp)) {
-        report({
-          field: 'mrp',
-          expected: 'MrpEnrichment object',
-          received: describeValueType(item.mrp),
-          index,
-          recordKey: contractNo,
-          action: 'coerced',
-          message: `Invalid mrp shape (${describeValueType(item.mrp)}); cleared.`,
-        });
-        cleaned.mrp = undefined;
-      } else {
-        cleaned.mrp = {
-          ...item.mrp,
-          paymentPattern: sanitizePaymentPattern(item.mrp.paymentPattern, report, contractNo, index),
-        };
-      }
-
-      result.push(cleaned as unknown as TrackedContract);
-    });
-
-    return result;
-  });
-}
-
-function sanitizeTrackedList(raw: unknown, source = 'trackedContracts'): TrackedContract[] {
-  return sanitizeTrackedListWithReport(raw, source).data;
 }
 
 function sanitizeStaffAssignmentsWithReport(
@@ -1036,11 +868,6 @@ export default function App() {
         : null;
     });
 
-  const [trackedContracts, setTrackedContracts] = useState<TrackedContract[]>(() => {
-    const { found, value } = readJsonStorageSafe(STORAGE_KEYS.TRACKED);
-    return found ? sanitizeTrackedList(value, `localStorage:${STORAGE_KEYS.TRACKED}`) : [];
-  });
-
   const [monthlySnapshots, setMonthlySnapshots] = useState<MonthlySnapshot[]>(() => {
     const { found, value } = readJsonStorageSafe(STORAGE_KEYS.SNAPSHOTS);
     return found
@@ -1065,8 +892,8 @@ export default function App() {
 
   const [activeNav, setActiveNav] = useState<NavSection>('overview');
   const [toolsSubTab, setToolsSubTab] = useState<
-    'staff_monitor' | 'office_breakdown' | 'bm_analytics' | 'ai' | 'alerts'
-  >('staff_monitor');
+    'office_breakdown' | 'bm_analytics' | 'alerts'
+  >('office_breakdown');
   const [settingsSubTab, setSettingsSubTab] = useState<'lookup' | 'backup'>('lookup');
   const [mrpMap, setMrpMap] = useState<Map<string, MrpEnrichment>>(() => {
     const { found, value } = readJsonStorageSafe(STORAGE_KEYS.MRP_MAP);
@@ -1075,9 +902,6 @@ export default function App() {
       : new Map<string, MrpEnrichment>();
   });
 
-  const [regularContractNos, setRegularContractNos] = useState<Set<string>>(() => new Set());
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState<FilterPreset>('all');
   const [selectedOfficer, setSelectedOfficer] = useState<string>('ALL');
   const [animKey, setAnimKey] = useState(0);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
@@ -1086,14 +910,6 @@ export default function App() {
   const [adminModalOpen, setAdminModalOpen] = useState(false);
   const isAdmin = Boolean(adminToken);
 
-  const [contractModalState, setContractModalState] = useState<{
-    isOpen: boolean;
-    mode: 'add' | 'edit' | 'log_visit';
-    contract: TrackedContract | null;
-  }>({ isOpen: false, mode: 'add', contract: null });
-  const [historyContract, setHistoryContract] =
-    useState<TrackedContract | null>(null);
-  const [waModalOpen, setWaModalOpen] = useState(false);
   const [toast, setToast] = useState<ToastBanner | null>(null);
   const [permissionState, setPermissionState] = useState<
     NotificationPermission | 'unsupported'
@@ -1152,15 +968,6 @@ export default function App() {
             setOpeningBaseline(
               sanitizeOpeningBaseline(cloud.openingBaseline, 'cloud:openingBaseline'),
             );
-          }
-
-          if (cloud.trackedContracts !== undefined) {
-            const trackedReport = sanitizeTrackedListWithReport(
-              cloud.trackedContracts,
-              'cloud:trackedContracts',
-            );
-            setTrackedContracts(trackedReport.data);
-            totalDropped += trackedReport.droppedCount;
           }
 
           if (cloud.monthlySnapshots !== undefined) {
@@ -1240,7 +1047,6 @@ export default function App() {
     aersMeta?: AersMetadata | null;
     mrpMap?: Map<string, MrpEnrichment>;
     openingBaseline?: OpeningOfficerBaseline | null;
-    trackedContracts?: TrackedContract[];
     monthlySnapshots?: MonthlySnapshot[];
     staffAssignments?: StaffAssignedContract[];
   }) => {
@@ -1257,7 +1063,7 @@ export default function App() {
         override?.openingBaseline !== undefined
           ? override.openingBaseline
           : openingBaseline,
-      trackedContracts: override?.trackedContracts ?? trackedContracts,
+      trackedContracts: [],
       monthlySnapshots: override?.monthlySnapshots ?? monthlySnapshots,
       staffAssignments: override?.staffAssignments ?? staffAssignments,
     };
@@ -1285,6 +1091,7 @@ export default function App() {
     try {
       localStorage.removeItem('wg_v2_opening_master');
       localStorage.removeItem('wg_v2_opening_meta');
+      localStorage.removeItem(STORAGE_KEYS.TRACKED);
       for (let i = localStorage.length - 1; i >= 0; i -= 1) {
         const key = localStorage.key(i);
         if (key && key.startsWith('wg_v1_')) {
@@ -1295,17 +1102,6 @@ export default function App() {
       // Ignore
     }
   }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        STORAGE_KEYS.TRACKED,
-        JSON.stringify(trackedContracts),
-      );
-    } catch {
-      // Ignore
-    }
-  }, [trackedContracts]);
 
   useEffect(() => {
     try {
@@ -1378,39 +1174,13 @@ export default function App() {
     return safeAers.filter((r) => getOfficerByOfficeType(r) === selectedOfficer);
   }, [aersRecords, selectedOfficer]);
 
-  const visibleTrackedContracts = useMemo(() => {
-    const safeTracked = Array.isArray(trackedContracts) ? trackedContracts : [];
-    if (selectedOfficer === 'ALL') return safeTracked;
-    return safeTracked.filter((c) => getOfficerByOfficeType(c) === selectedOfficer);
-  }, [trackedContracts, selectedOfficer]);
-
-  const aersMap = useMemo(() => {
-    const map = new Map<string, AersRecord>();
-    if (Array.isArray(aersRecords)) {
-      aersRecords.forEach((r) => {
-        if (r && typeof r.contractNo === 'string') {
-          map.set(normalizeContractNo(r.contractNo), r);
-        }
-      });
-    }
-    return map;
-  }, [aersRecords]);
-
-  const trackedContractNos = useMemo(() => {
-    if (!Array.isArray(trackedContracts)) return new Set<string>();
-    return new Set(
-      trackedContracts
-        .filter((c) => c && typeof c.contractNo === 'string')
-        .map((c) => normalizeContractNo(c.contractNo)),
-    );
-  }, [trackedContracts]);
-
   const strategySummary = useMemo(() => {
     try {
-      const items =
-        visibleAersRecords.length > 0
-          ? normalizeEvaluableFromAers(visibleAersRecords, trackedContractNos, mrpMap)
-          : normalizeEvaluableFromTracked(visibleTrackedContracts);
+      const items = normalizeEvaluableFromAers(
+        visibleAersRecords,
+        EMPTY_STRING_SET,
+        mrpMap,
+      );
       const safeItems = Array.isArray(items) ? items : [];
       const offices = computeOfficeTypeBreakdown(safeItems);
       const safeOffices = Array.isArray(offices) ? offices : [];
@@ -1432,47 +1202,105 @@ export default function App() {
         worstCount: 0,
       };
     }
-  }, [visibleAersRecords, visibleTrackedContracts, trackedContractNos, mrpMap]);
+  }, [visibleAersRecords, mrpMap]);
 
   const worstCount = useMemo(() => {
     try {
-      if (visibleAersRecords.length > 0) {
-        return visibleAersRecords.filter((r) =>
-          isWorstCategory(r.nplReason, r.worstCaseProduct),
-        ).length;
-      }
-      return visibleTrackedContracts.filter((c) =>
-        isWorstCategory(c.nplReason, c.worstCaseProduct),
+      return visibleAersRecords.filter((r) =>
+        isWorstCategory(r.nplReason, r.worstCaseProduct),
       ).length;
     } catch {
       return 0;
     }
-  }, [visibleAersRecords, visibleTrackedContracts]);
+  }, [visibleAersRecords]);
 
-  const alertDigest = useMemo(() => {
-    try {
-      const d = buildRecoveryAlertDigest(visibleTrackedContracts);
-      return {
-        todayPp: Array.isArray(d?.todayPp) ? d.todayPp : [],
-        brokenPp: Array.isArray(d?.brokenPp) ? d.brokenPp : [],
-        dpd91Danger: Array.isArray(d?.dpd91Danger) ? d.dpd91Danger : [],
-        pendingHandOver: Array.isArray(d?.pendingHandOver) ? d.pendingHandOver : [],
-      };
-    } catch {
-      return {
-        todayPp: [],
-        brokenPp: [],
-        dpd91Danger: [],
-        pendingHandOver: [],
-      };
+  const aersAlertSummary = useMemo(() => {
+    let dpd91Danger = 0;
+    let zeroEffortBorderline = 0;
+    let newlySlippedNpl = 0;
+    let worst = 0;
+    let belowOne = 0;
+
+    for (const r of visibleAersRecords) {
+      if ((r.currentAge || 0) <= 1.0) belowOne += 1;
+      const isBorderline = isBorderlineNplAccount({
+        actualDpd: r.actualDpd,
+        opAge: r.opAge,
+        currentAge: r.currentAge,
+        monthEndForecastDpd: r.monthEndForecastDpd,
+        opNpl: r.opNpl,
+        npl: r.npl,
+        totalCollection: r.totalCollection,
+        lastPaidAmount: r.lastPaidAmount,
+      });
+      if (
+        (r.npl || 0) <= 0 &&
+        ((r.actualDpd >= 80 && r.actualDpd <= 90) ||
+          (r.monthEndForecastDpd >= 91 && r.actualDpd < 91))
+      ) {
+        dpd91Danger += 1;
+      }
+      if (isBorderline && (r.assignOfficerEfforts || 0) === 0) {
+        zeroEffortBorderline += 1;
+      }
+      if (isFallenNplAccount(r)) newlySlippedNpl += 1;
+      if (isWorstCategory(r.nplReason, r.worstCaseProduct)) worst += 1;
     }
-  }, [visibleTrackedContracts]);
+
+    const bm = selectedOfficer === 'ALL' ? aersMeta?.bmBranchSnapshot : undefined;
+    const ratio90Pct: number =
+      typeof bm?.ratio90Pct === 'number' && bm.ratio90Pct > 0
+        ? bm.ratio90Pct
+        : visibleAersRecords.length > 0
+          ? (belowOne / visibleAersRecords.length) * 100
+          : 0;
+
+    return {
+      dpd91Danger,
+      zeroEffortBorderline,
+      newlySlippedNpl,
+      worst,
+      ratio90Pct,
+    };
+  }, [visibleAersRecords, aersMeta, selectedOfficer]);
 
   const urgentAlertsCount =
-    alertDigest.todayPp.length +
-    alertDigest.brokenPp.length +
-    alertDigest.dpd91Danger.length +
-    alertDigest.pendingHandOver.length;
+    aersAlertSummary.dpd91Danger +
+    aersAlertSummary.zeroEffortBorderline +
+    aersAlertSummary.newlySlippedNpl;
+
+  const sendAersDesktopNotification = useCallback(
+    (
+      summary: typeof aersAlertSummary,
+      withSound: boolean,
+      force = false,
+    ): { sentCount: number; permission: NotificationPermission | 'unsupported' } => {
+      if (typeof window === 'undefined' || !('Notification' in window)) {
+        return { sentCount: 0, permission: 'unsupported' };
+      }
+      const perm = Notification.permission;
+      if (perm !== 'granted') {
+        return { sentCount: 0, permission: perm };
+      }
+      const total =
+        summary.dpd91Danger +
+        summary.zeroEffortBorderline +
+        summary.newlySlippedNpl;
+      if (total === 0 && !force) {
+        return { sentCount: 0, permission: perm };
+      }
+      try {
+        new Notification('WG Pulse — Live Recovery Alert', {
+          body: `91-DPD Danger: ${summary.dpd91Danger} · 0-Effort Borderline: ${summary.zeroEffortBorderline} · Newly Slipped NPL: ${summary.newlySlippedNpl} · 90 Ratio: ${summary.ratio90Pct.toFixed(1)}%`,
+        });
+        if (withSound) playAlertChime();
+        return { sentCount: 1, permission: perm };
+      } catch {
+        return { sentCount: 0, permission: perm };
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) return;
@@ -1483,7 +1311,7 @@ export default function App() {
           setPermissionState(perm);
           if (perm === 'granted' && notifPrefs.enabled && !startupNotifiedRef.current) {
             startupNotifiedRef.current = true;
-            triggerDesktopNotifications(alertDigest, notifPrefs.soundEnabled);
+            sendAersDesktopNotification(aersAlertSummary, notifPrefs.soundEnabled);
           }
         })
         .catch(() => {});
@@ -1493,15 +1321,22 @@ export default function App() {
       !startupNotifiedRef.current
     ) {
       startupNotifiedRef.current = true;
-      triggerDesktopNotifications(alertDigest, false);
+      sendAersDesktopNotification(aersAlertSummary, false);
     }
-  }, [alertDigest, notifPrefs.enabled, notifPrefs.soundEnabled]);
+  }, [
+    aersAlertSummary,
+    notifPrefs.enabled,
+    notifPrefs.soundEnabled,
+    sendAersDesktopNotification,
+  ]);
 
   useEffect(() => {
     if (!notifPrefs.enabled || !notifPrefs.hourlyReminder) return;
     const interval = setInterval(() => {
-      const digest = buildRecoveryAlertDigest(trackedContracts);
-      const res = triggerDesktopNotifications(digest, notifPrefs.soundEnabled);
+      const res = sendAersDesktopNotification(
+        aersAlertSummary,
+        notifPrefs.soundEnabled,
+      );
       if (res.sentCount > 0) {
         setNotifPrefs((prev) => ({
           ...prev,
@@ -1514,7 +1349,8 @@ export default function App() {
     notifPrefs.enabled,
     notifPrefs.hourlyReminder,
     notifPrefs.soundEnabled,
-    trackedContracts,
+    aersAlertSummary,
+    sendAersDesktopNotification,
   ]);
 
   const handleRequestNotifPermission = async () => {
@@ -1532,7 +1368,7 @@ export default function App() {
       if (perm === 'granted') {
         showToast(
           'PC Pop-up Alerts Enabled',
-          'Desktop notifications are now permitted for P/P and 91 DPD alerts.',
+          'Desktop notifications are now permitted for 91 DPD Danger & NPL alerts.',
           'success',
         );
       } else {
@@ -1559,8 +1395,8 @@ export default function App() {
       }
     }
 
-    const res = triggerDesktopNotifications(
-      alertDigest,
+    const res = sendAersDesktopNotification(
+      aersAlertSummary,
       notifPrefs.soundEnabled,
       true,
     );
@@ -1574,16 +1410,13 @@ export default function App() {
       lastNotifiedAt: new Date().toLocaleTimeString(),
     }));
 
+    const detail = `91-DPD Danger: ${aersAlertSummary.dpd91Danger} · 0-Effort Borderline: ${aersAlertSummary.zeroEffortBorderline} · Newly Slipped NPL: ${aersAlertSummary.newlySlippedNpl} · WORST (W): ${aersAlertSummary.worst}`;
     if (res.sentCount > 0) {
-      showToast(
-        `Sent ${res.sentCount} PC Pop-up Notification${res.sentCount === 1 ? '' : 's'}`,
-        `Today P/P: ${alertDigest.todayPp.length} · Broken P/P: ${alertDigest.brokenPp.length} · 91 DPD Danger: ${alertDigest.dpd91Danger.length} · Hand Over: ${alertDigest.pendingHandOver.length}`,
-        'success',
-      );
+      showToast('Sent PC Pop-up Alert', detail, 'success');
     } else {
       showToast(
-        'In-App Recovery Alert Digest',
-        `Today P/P: ${alertDigest.todayPp.length} · Broken P/P: ${alertDigest.brokenPp.length} · 91 DPD Danger: ${alertDigest.dpd91Danger.length} · Hand Over: ${alertDigest.pendingHandOver.length} (OS pop-up permission: ${res.permission})`,
+        'In-App Recovery Alert Summary',
+        `${detail} (OS pop-up permission: ${res.permission})`,
         'info',
       );
     }
@@ -1606,27 +1439,12 @@ export default function App() {
     );
     const cleanParsedRecords = sanitizedAersReport.data;
 
-    const nextMap = new Map<string, AersRecord>();
-    cleanParsedRecords.forEach((r) => {
-      nextMap.set(normalizeContractNo(r.contractNo), r);
-    });
-
     const effectiveMrpMap = parsed.mrpMap
       ? sanitizeMrpMap(parsed.mrpMap, `upload:${parsed.metadata?.fileName || 'aers'}:mrp`)
       : mrpMap;
     if (parsed.mrpMap) {
       setMrpMap(effectiveMrpMap);
     }
-
-    const syncResult = syncTrackedContractsWithAers(
-      trackedContracts,
-      nextMap,
-      parsed.metadata,
-      {
-        mrpMap: effectiveMrpMap,
-        watchlistImports: parsed.watchlistImports,
-      },
-    );
 
     const nextBaseline = sanitizeOpeningBaseline(
       parsed.excelOfficerOpeningBaseline ??
@@ -1638,26 +1456,25 @@ export default function App() {
     );
     setOpeningBaseline(nextBaseline);
 
-    const cleanSyncedContracts = sanitizeTrackedList(
-      syncResult.updatedContracts,
-      'upload:syncedTrackedContracts',
-    );
-
-    setRegularContractNos(new Set(parsed.excludedRegularContractNos ?? []));
     setAersRecords(cleanParsedRecords);
     setAersMeta(parsed.metadata);
-    setTrackedContracts(cleanSyncedContracts);
     setAnimKey((k) => k + 1);
 
-    const idx = monthlySnapshots.findIndex(
-      (s) => s.snapshotDate === syncResult.snapshot.snapshotDate,
+    // Daily-keyed snapshot: same-day uploads overwrite today's snapshot with the latest file;
+    // a new day locks the previous day's last upload and appends a fresh daily record.
+    const dailySnapshot = buildDailyAersSnapshot(cleanParsedRecords, parsed.metadata);
+    const existingIdx = monthlySnapshots.findIndex(
+      (s) => s.snapshotDate === dailySnapshot.snapshotDate,
     );
     let nextSnapshots: MonthlySnapshot[];
-    if (idx >= 0) {
+    if (existingIdx >= 0) {
       nextSnapshots = [...monthlySnapshots];
-      nextSnapshots[idx] = { ...syncResult.snapshot, id: nextSnapshots[idx].id };
+      nextSnapshots[existingIdx] = {
+        ...dailySnapshot,
+        id: nextSnapshots[existingIdx].id,
+      };
     } else {
-      nextSnapshots = [...monthlySnapshots, syncResult.snapshot];
+      nextSnapshots = [...monthlySnapshots, dailySnapshot];
     }
     nextSnapshots.sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
     setMonthlySnapshots(nextSnapshots);
@@ -1669,7 +1486,6 @@ export default function App() {
         aersMeta: parsed.metadata,
         mrpMap: effectiveMrpMap,
         openingBaseline: nextBaseline,
-        trackedContracts: cleanSyncedContracts,
         monthlySnapshots: nextSnapshots,
       });
       if (published) {
@@ -1679,15 +1495,14 @@ export default function App() {
       cloudNote = ` · Cloud sync error: ${err instanceof Error ? err.message : 'Failed'}`;
     }
 
-    const excludedCount = parsed.excludedRegularContractNos?.length ?? 0;
-    const excludedNote =
-      excludedCount > 0
-        ? ` · ${excludedCount.toLocaleString()} regular excluded`
-        : '';
+    const snapAction =
+      existingIdx >= 0
+        ? `Updated ${dailySnapshot.snapshotDate} snapshot`
+        : `Locked previous day & created ${dailySnapshot.snapshotDate} snapshot`;
 
     showToast(
-      `Workbook Replaced & Auto-Synced (${parsed.records.length.toLocaleString()} NPL/Borderline)`,
-      `Synced ${syncResult.syncedCount} tracked${excludedNote}${cloudNote}`,
+      `AERS Workbook Loaded (${cleanParsedRecords.length.toLocaleString()} accounts)`,
+      `${snapAction}${cloudNote}`,
       'success',
     );
   };
@@ -1715,26 +1530,6 @@ export default function App() {
     }
   };
 
-  const handlePasteAersText = async (rawText: string) => {
-    if (!isAdmin) {
-      setAdminModalOpen(true);
-      return;
-    }
-    try {
-      const parsed = parseAersPastedText(
-        rawText,
-        `Daily Paste (${getTodayISO()})`,
-      );
-      await applyParsedAersResult(parsed);
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : 'Failed to parse pasted Age Evaluation rows.';
-      showToast('Daily Paste Error', msg, 'error');
-    }
-  };
-
   const handleSetCurrentAsOpening = () => {
     if (aersRecords.length === 0) return;
     setOpeningBaseline(
@@ -1745,163 +1540,7 @@ export default function App() {
     );
     showToast(
       'Opening Baseline Updated',
-      `Locked lightweight per-officer Opening totals (${aersMeta?.printedDateTime || getTodayISO()}).`,
-      'success',
-    );
-  };
-
-  const handleSaveSingleContract = (contract: TrackedContract) => {
-    setTrackedContracts((prev) => {
-      const exists = prev.some(
-        (c) =>
-          normalizeContractNo(c.contractNo) ===
-          normalizeContractNo(contract.contractNo),
-      );
-      const next = exists
-        ? prev.map((c) =>
-            normalizeContractNo(c.contractNo) ===
-            normalizeContractNo(contract.contractNo)
-              ? contract
-              : c,
-          )
-        : [contract, ...prev];
-      if (isAdmin) {
-        pushToLiveCloudIfConfigured({ trackedContracts: next }).catch(() => {});
-      }
-      return next;
-    });
-    showToast(
-      'Watchlist Updated',
-      `${contract.contractNo} (${contract.cusName}) saved.`,
-      'success',
-    );
-  };
-
-  const handleBulkAddContracts = (contractsToAdd: TrackedContract[]) => {
-    setTrackedContracts((prev) => {
-      const next = [...contractsToAdd, ...prev];
-      if (isAdmin) {
-        pushToLiveCloudIfConfigured({ trackedContracts: next }).catch(() => {});
-      }
-      return next;
-    });
-    showToast(
-      'Bulk Import Complete',
-      `Added ${contractsToAdd.length} contract${contractsToAdd.length === 1 ? '' : 's'} to active Watchlist.`,
-      'success',
-    );
-  };
-
-  const handleAddFromMaster = (record: AersRecord) => {
-    if (trackedContractNos.has(normalizeContractNo(record.contractNo))) return;
-    const today = getTodayISO();
-    const assignedOfficer = getOfficerByOfficeType(record);
-    const newTracked: TrackedContract = {
-      contractNo: record.contractNo,
-      cusName: record.cusName,
-      mobileNo: record.mobileNo,
-      address: record.address,
-      officeType: record.officeType,
-      opAge: record.opAge,
-      currentAge: record.currentAge,
-      opBalDebtor: record.opBalDebtor,
-      closingDebtor: record.closingDebtor,
-      capitalOutstanding: record.capitalOutstanding,
-      opCapitalOutstanding: record.opCapitalOutstanding,
-      capitalArrears: record.capitalArrears,
-      currentMonthDue: record.currentMonthDue,
-      totalCollection: record.totalCollection,
-      opNpl: record.opNpl,
-      npl: record.npl,
-      actualDpd: record.actualDpd,
-      monthEndForecastDpd: record.monthEndForecastDpd,
-      minAmountToReverseNpl: record.minAmountToReverseNpl,
-      recoveryOfficer: record.recoveryOfficer,
-      marketingOfficer: record.marketingOfficer,
-      lastPayDate: record.lastPayDate,
-      lastPaidAmount: record.lastPaidAmount,
-      nplReason: record.nplReason,
-      worstCaseProduct: record.worstCaseProduct,
-      assignOfficerEfforts: record.assignOfficerEfforts,
-      totalEfforts: record.totalEfforts,
-      vehicleNo: record.currentStock
-        ? normalizeVehicleNo(record.currentStock)
-        : '',
-      visitWith: 'My Self',
-      visitDate: today,
-      ppDate: '',
-      handOverDate: '',
-      remark: 'Added from AERS Master Lookup.',
-      remarkBy: assignedOfficer || 'Officer',
-      ro: assignedOfficer,
-      currentSituation: 'Active Follow-Up',
-      mrp: mrpMap.get(normalizeContractNo(record.contractNo)),
-      locationUrl: '',
-      nplSavedAmount: 0,
-      addedAt: today,
-      lastSyncedAt: aersMeta?.printedDateTime,
-      visitHistory: [],
-    };
-    setTrackedContracts((prev) => {
-      const next = [newTracked, ...prev];
-      if (isAdmin) {
-        pushToLiveCloudIfConfigured({ trackedContracts: next }).catch(() => {});
-      }
-      return next;
-    });
-    showToast(
-      'Added to Watchlist',
-      `${record.contractNo} (${record.cusName}) is now tracked.`,
-      'success',
-    );
-  };
-
-  const handleRemoveContract = (contractNo: string) => {
-    setTrackedContracts((prev) => {
-      const next = prev.filter(
-        (c) =>
-          normalizeContractNo(c.contractNo) !== normalizeContractNo(contractNo),
-      );
-      if (isAdmin) {
-        pushToLiveCloudIfConfigured({ trackedContracts: next }).catch(() => {});
-      }
-      return next;
-    });
-    showToast(
-      'Removed from Watchlist',
-      `${contractNo} removed from active tracking (remains in AERS Lookup).`,
-      'info',
-    );
-  };
-
-  const handleApplyWhatsAppMatches = (matches: WhatsAppLocationMatch[]) => {
-    const byContract = new Map<string, WhatsAppLocationMatch>();
-    matches.forEach((m) => {
-      if (m.matchedContractNo) {
-        byContract.set(normalizeContractNo(m.matchedContractNo), m);
-      }
-    });
-
-    setTrackedContracts((prev) => {
-      const next = prev.map((c) => {
-        const hit = byContract.get(normalizeContractNo(c.contractNo));
-        if (!hit) return c;
-        return {
-          ...c,
-          locationUrl: hit.locationUrl,
-          locationUpdatedAt: hit.timestampText,
-          locationText: hit.locationText,
-        };
-      });
-      if (isAdmin) {
-        pushToLiveCloudIfConfigured({ trackedContracts: next }).catch(() => {});
-      }
-      return next;
-    });
-
-    showToast(
-      'WhatsApp Locations Synced',
-      `Updated Google Maps pins on ${byContract.size} tracked contract${byContract.size === 1 ? '' : 's'}.`,
+      `Locked per-officer Opening totals (${aersMeta?.printedDateTime || getTodayISO()}).`,
       'success',
     );
   };
@@ -1985,7 +1624,7 @@ export default function App() {
     const payload: BackupPayload = {
       version: 3,
       exportedAt: new Date().toISOString(),
-      trackedContracts,
+      trackedContracts: [],
       monthlySnapshots,
       aersMeta,
       aersMasterList: aersRecords,
@@ -2004,7 +1643,7 @@ export default function App() {
     URL.revokeObjectURL(url);
     showToast(
       'Backup Exported',
-      'Downloaded full JSON backup of Watchlist, Visit Histories, AERS Lookup, and Snapshots.',
+      'Downloaded full JSON backup of AERS Master Lookup, Assign User Follow-Ups, and Daily Snapshots.',
       'success',
     );
   };
@@ -2013,20 +1652,15 @@ export default function App() {
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as Partial<BackupPayload>;
-      if (!isPlainObject(parsed) || !Array.isArray(parsed.trackedContracts)) {
+      if (!isPlainObject(parsed)) {
         throw new Error(
-          `Invalid backup file: expected object with trackedContracts array, got ${describeValueType(parsed)}.`,
+          `Invalid backup file: expected JSON object, got ${describeValueType(parsed)}.`,
         );
       }
 
-      const trackedReport = sanitizeTrackedListWithReport(
-        parsed.trackedContracts,
-        `backup:${file.name}:trackedContracts`,
-      );
-      setTrackedContracts(trackedReport.data);
-
-      let totalDropped = trackedReport.droppedCount;
+      let totalDropped = 0;
       let restoredSnapCount = 0;
+      let restoredAersCount = 0;
 
       if (parsed.monthlySnapshots !== undefined) {
         const snapReport = sanitizeSnapshotsListWithReport(
@@ -2044,6 +1678,7 @@ export default function App() {
           `backup:${file.name}:aersMasterList`,
         );
         setAersRecords(aersReport.data);
+        restoredAersCount = aersReport.data.length;
         totalDropped += aersReport.droppedCount;
       }
 
@@ -2091,7 +1726,7 @@ export default function App() {
           : '';
       showToast(
         totalDropped > 0 ? 'Backup Restored with Warnings' : 'Backup Restored',
-        `Restored ${trackedReport.data.length} tracked contracts and ${restoredSnapCount} snapshots${droppedNote}.`,
+        `Restored ${restoredAersCount.toLocaleString()} AERS accounts and ${restoredSnapCount} daily snapshots${droppedNote}.`,
         totalDropped > 0 ? 'info' : 'success',
       );
     } catch (err) {
@@ -2109,7 +1744,7 @@ export default function App() {
     }
     showToast(
       'Published Live to Everyone',
-      `All ${aersRecords.length.toLocaleString()} accounts & ${trackedContracts.length} watchlist contracts are now live for all users.`,
+      `All ${aersRecords.length.toLocaleString()} AERS accounts & ${staffAssignments.length} assigned follow-ups are now live for all users.`,
       'success',
     );
   };
@@ -2121,9 +1756,7 @@ export default function App() {
     setAersRecords([]);
     setAersMeta(null);
     setMrpMap(new Map());
-    setRegularContractNos(new Set());
     setOpeningBaseline(null);
-    setTrackedContracts([]);
     setMonthlySnapshots([]);
     setStaffAssignments([]);
     setSelectedOfficer('ALL');
@@ -2140,14 +1773,13 @@ export default function App() {
       aersMeta: null,
       mrpMap: new Map(),
       openingBaseline: null,
-      trackedContracts: [],
       monthlySnapshots: [],
       staffAssignments: [],
     }).catch(() => {});
 
     showToast(
       'Total App Reset Complete',
-      'Authorized by Admin. Watchlist, AERS Lookup, Opening Baseline, and Monthly Snapshots have been cleared.',
+      'Authorized by Admin. AERS Lookup, Assign User Follow-Ups, Opening Baseline, and Daily Snapshots have been cleared.',
       'info',
     );
   };
@@ -2164,6 +1796,19 @@ export default function App() {
       label: 'Strategy Dashboard',
       shortLabel: 'Dashboard',
       icon: <LayoutDashboard className="w-4 h-4 shrink-0" />,
+    },
+    {
+      id: 'assign_user',
+      label: 'Assign User Follow-Up & Performance',
+      shortLabel: 'Assign User',
+      icon: <ClipboardCheck className="w-4 h-4 shrink-0" />,
+      badge: staffAssignments.length > 0 ? staffAssignments.length : undefined,
+    },
+    {
+      id: 'below_one',
+      label: 'Below 1 · 90 Ratio Plan',
+      shortLabel: 'Below 1 (90R)',
+      icon: <Target className="w-4 h-4 shrink-0" />,
     },
     {
       id: 'borderline',
@@ -2193,7 +1838,7 @@ export default function App() {
   }[] = [
     {
       id: 'tools',
-      label: 'BM Analytics, AI & Alerts',
+      label: 'Office Breakdown, BM Analytics & Alerts',
       shortLabel: 'Tools Menu',
       icon: <Layers className="w-4 h-4 shrink-0" />,
       badge: urgentAlertsCount > 0 ? urgentAlertsCount : undefined,
@@ -2210,10 +1855,12 @@ export default function App() {
   const month30thLabel = getMonth30thLabel();
 
   const breadcrumbLabel: Record<NavSection, string> = {
-    overview: 'Strategy Dashboard, Trends & Watchlist',
+    overview: 'Strategy Dashboard, Officer Hub & Trends',
+    assign_user: 'Assign User Follow-Up & Performance Dashboard',
+    below_one: 'Below 1 (≤ 1.00) · 90 Ratio Action Plan',
     borderline: 'Next-Month Borderline Control',
     worst: 'Worst Case (W) Radar',
-    tools: 'BM Analytics, AI Strategist & Alerts',
+    tools: 'Office Breakdown, BM Portfolio Analytics & Alerts',
     settings: 'Settings · NPL Master Lookup & Admin Reset',
   };
 
@@ -2224,10 +1871,6 @@ export default function App() {
         <div className="flex items-center gap-3.5 min-w-0">
           <div className="relative flex items-center justify-center p-2 rounded-2xl bg-gradient-to-br from-emerald-500 via-teal-600 to-slate-900 shadow-md shadow-emerald-950/20 border border-emerald-400/30 shrink-0">
             <PulseLogoMark className="w-6 h-6 text-white drop-shadow" />
-            <span className="absolute -top-1 -right-1 flex h-3 w-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500 border-2 border-white dark:border-slate-900" />
-            </span>
           </div>
 
           <div className="min-w-0">
@@ -2335,39 +1978,21 @@ export default function App() {
           </button>
 
           {isAdmin && (
-            <>
-              <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer transition-colors whitespace-nowrap shrink-0 shadow-xs">
-                <Upload className="w-3.5 h-3.5 text-blue-600" />
-                <span className="hidden md:inline">Upload AERS</span>
-                <span className="md:hidden">AERS</span>
-                <input
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleUploadAersFile(file);
-                    e.target.value = '';
-                  }}
-                />
-              </label>
-
-              <button
-                type="button"
-                onClick={() =>
-                  setContractModalState({
-                    isOpen: true,
-                    mode: 'add',
-                    contract: null,
-                  })
-                }
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:from-emerald-700 hover:to-teal-700 shadow-sm transition-all whitespace-nowrap shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Add Contract</span>
-                <span className="sm:hidden">Add</span>
-              </button>
-            </>
+            <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer transition-colors whitespace-nowrap shrink-0 shadow-xs">
+              <Upload className="w-3.5 h-3.5 text-blue-600" />
+              <span className="hidden md:inline">Upload AERS</span>
+              <span className="md:hidden">AERS</span>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleUploadAersFile(file);
+                  e.target.value = '';
+                }}
+              />
+            </label>
           )}
 
           <button
@@ -2439,26 +2064,21 @@ export default function App() {
             </span>
             <span aria-hidden="true">·</span>
             <span>
-              Watchlist:{' '}
+              90 Ratio (≤1.00):{' '}
+              <span className="font-mono font-semibold text-emerald-700 dark:text-emerald-400">
+                {aersAlertSummary.ratio90Pct.toFixed(1)}%
+              </span>
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>
+              AERS Indexed:{' '}
               <span className="font-mono text-slate-900 dark:text-slate-200">
-                {visibleTrackedContracts.length}
-              </span>{' '}
-              of {visibleAersRecords.length.toLocaleString()} indexed
+                {visibleAersRecords.length.toLocaleString()}
+              </span>
             </span>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => setWaModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
-              >
-                <MessageSquare className="w-3.5 h-3.5" />
-                Sync WhatsApp
-              </button>
-            )}
-
             <button
               type="button"
               onClick={handleTestPopup}
@@ -2477,23 +2097,23 @@ export default function App() {
         <div className="absolute right-0 top-0 bottom-0 z-10 w-12 bg-gradient-to-l from-emerald-950 to-transparent pointer-events-none" />
         <div className="animate-marquee flex items-center gap-8 whitespace-nowrap">
           <span className="inline-flex items-center gap-1.5 font-bold text-emerald-300">
-            <Bell className="w-3.5 h-3.5 animate-bounce" />
-            LIVE RECOVERY ALERTS:
+            <Bell className="w-3.5 h-3.5" />
+            LIVE AERS ALERTS:
           </span>
-          <span>· Today P/P: {alertDigest.todayPp.length} accounts committed</span>
-          <span>· Broken P/P: {alertDigest.brokenPp.length} high priority follow-ups</span>
-          <span>· 91-DPD Danger Zone: {alertDigest.dpd91Danger.length} contracts crossing this month</span>
-          <span>· Hand Over Pending: {alertDigest.pendingHandOver.length} repossession files</span>
-          <span>· WhatsApp GPS Pins Synced: {visibleTrackedContracts.filter((c) => c.locationUrl).length} active locations</span>
+          <span>· 91-DPD Danger Zone: {aersAlertSummary.dpd91Danger} pre-NPL accounts</span>
+          <span>· 0-Effort Borderline: {aersAlertSummary.zeroEffortBorderline} uncontacted files</span>
+          <span>· Newly Slipped NPL: {aersAlertSummary.newlySlippedNpl} accounts</span>
+          <span>· WORST (W) Priority: {aersAlertSummary.worst} files</span>
+          <span>· Below 1 (90 Ratio): {aersAlertSummary.ratio90Pct.toFixed(1)}% (Target 90.0%)</span>
           <span className="inline-flex items-center gap-1.5 font-bold text-emerald-300 ml-8">
-            <Bell className="w-3.5 h-3.5 animate-bounce" />
-            LIVE RECOVERY ALERTS:
+            <Bell className="w-3.5 h-3.5" />
+            LIVE AERS ALERTS:
           </span>
-          <span>· Today P/P: {alertDigest.todayPp.length} accounts committed</span>
-          <span>· Broken P/P: {alertDigest.brokenPp.length} high priority follow-ups</span>
-          <span>· 91-DPD Danger Zone: {alertDigest.dpd91Danger.length} contracts crossing this month</span>
-          <span>· Hand Over Pending: {alertDigest.pendingHandOver.length} repossession files</span>
-          <span>· WhatsApp GPS Pins Synced: {visibleTrackedContracts.filter((c) => c.locationUrl).length} active locations</span>
+          <span>· 91-DPD Danger Zone: {aersAlertSummary.dpd91Danger} pre-NPL accounts</span>
+          <span>· 0-Effort Borderline: {aersAlertSummary.zeroEffortBorderline} uncontacted files</span>
+          <span>· Newly Slipped NPL: {aersAlertSummary.newlySlippedNpl} accounts</span>
+          <span>· WORST (W) Priority: {aersAlertSummary.worst} files</span>
+          <span>· Below 1 (90 Ratio): {aersAlertSummary.ratio90Pct.toFixed(1)}% (Target 90.0%)</span>
         </div>
       </div>
 
@@ -2544,12 +2164,11 @@ export default function App() {
                 aria-label="Recovery Strategy Summary"
                 className="bg-gradient-to-br from-emerald-950 via-slate-900 to-slate-950 text-white border border-emerald-800/40 rounded-3xl p-6 sm:p-7 shadow-xl shadow-slate-950/25 relative overflow-hidden backdrop-blur-xl"
               >
-                <div className="absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-600 animate-pulse opacity-75" />
+                <div className="absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-600 opacity-75" />
 
                 <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 relative z-10">
                   <div className="space-y-3.5 max-w-2xl">
                     <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
                       <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">
                         WG Pulse Executive Command · Campaign Nov 2026 – Mar 2027
                       </span>
@@ -2607,37 +2226,20 @@ export default function App() {
 
                     <div className="flex flex-wrap items-center gap-2.5 pt-2">
                       {isAdmin ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setContractModalState({
-                                isOpen: true,
-                                mode: 'add',
-                                contract: null,
-                              })
-                            }
-                            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-md transition-all whitespace-nowrap"
-                          >
-                            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                            + Add Contract
-                          </button>
-
-                          <label className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white cursor-pointer transition-all whitespace-nowrap">
-                            <Upload className="w-3.5 h-3.5 text-emerald-400" />
-                            Upload Daily AERS
-                            <input
-                              type="file"
-                              accept=".xlsx,.xls,.csv"
-                              className="hidden"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) handleUploadAersFile(file);
-                                e.target.value = '';
-                              }}
-                            />
-                          </label>
-                        </>
+                        <label className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-md cursor-pointer transition-all whitespace-nowrap">
+                          <Upload className="w-3.5 h-3.5 stroke-[2.5]" />
+                          Upload Daily AERS
+                          <input
+                            type="file"
+                            accept=".xlsx,.xls,.csv"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleUploadAersFile(file);
+                              e.target.value = '';
+                            }}
+                          />
+                        </label>
                       ) : (
                         <button
                           type="button"
@@ -2660,14 +2262,20 @@ export default function App() {
 
                       <button
                         type="button"
-                        onClick={() => {
-                          setToolsSubTab('ai');
-                          setActiveNav('tools');
-                        }}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-slate-200 transition-all whitespace-nowrap"
+                        onClick={() => setActiveNav('assign_user')}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-blue-500/20 hover:bg-blue-500/30 border border-blue-400/30 text-blue-200 transition-all whitespace-nowrap"
                       >
-                        <Bot className="w-3.5 h-3.5 text-teal-300" />
-                        AI &amp; Google Maps
+                        <ClipboardCheck className="w-3.5 h-3.5 text-blue-300" />
+                        Assign User
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveNav('below_one')}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-emerald-200 transition-all whitespace-nowrap"
+                      >
+                        <Target className="w-3.5 h-3.5 text-emerald-400" />
+                        Below 1 · 90 Ratio Plan
                       </button>
                     </div>
                   </div>
@@ -2689,79 +2297,45 @@ export default function App() {
                 <ExecutiveOfficerHubPanel
                   aersRecords={aersRecords}
                   aersMeta={aersMeta}
-                  trackedContracts={trackedContracts}
                   mrpMap={mrpMap}
                   openingBaseline={openingBaseline}
                   monthlySnapshots={monthlySnapshots}
                   selectedOfficer={selectedOfficer}
                   onSelectOfficer={setSelectedOfficer}
-                  onAddFromMaster={handleAddFromMaster}
+                  staffAssignments={staffAssignments}
+                  onAssignStaffBulk={handleAssignStaffBulk}
+                  onRemoveStaffAssignment={handleRemoveStaffAssignment}
+                  onClearStaffMonth={handleClearStaffMonth}
                 />
               </SectionSafeBoundary>
 
               <SectionSafeBoundary name="KPI Strip" resetKey={animKey}>
                 <KpiStrip
-                  contracts={visibleTrackedContracts}
                   aersRecords={visibleAersRecords}
+                  aersMeta={aersMeta}
                   mrpMap={mrpMap}
+                  isFilteredOfficer={selectedOfficer !== 'ALL'}
                   animKey={animKey}
                 />
               </SectionSafeBoundary>
 
               <SectionSafeBoundary name="Trends Evaluation" resetKey={animKey}>
                 <TrendsEvaluationPanel
-                  trackedContracts={visibleTrackedContracts}
                   aersRecords={visibleAersRecords}
                   aersMeta={aersMeta}
                   mrpMap={mrpMap}
                   openingBaseline={openingBaseline}
                   isDark={isDark}
-                  onUploadAersFile={handleUploadAersFile}
-                  onPasteAersText={handlePasteAersText}
                   onSetCurrentAsOpening={handleSetCurrentAsOpening}
                   onOpenWorstRadar={() => setActiveNav('worst')}
                   onOpenBorderlineCards={() => setActiveNav('borderline')}
                 />
               </SectionSafeBoundary>
 
-              <SectionSafeBoundary name="Tracking Table" resetKey={animKey}>
-                <TrackingTable
-                  contracts={visibleTrackedContracts}
-                  mrpMap={mrpMap}
-                  searchQuery={searchQuery}
-                  onSearchChange={setSearchQuery}
-                  activeFilter={activeFilter}
-                  onFilterChange={setActiveFilter}
-                  onLogVisit={(c) =>
-                    setContractModalState({
-                      isOpen: true,
-                      mode: 'log_visit',
-                      contract: c,
-                    })
-                  }
-                  onEditContract={(c) =>
-                    setContractModalState({
-                      isOpen: true,
-                      mode: 'edit',
-                      contract: c,
-                    })
-                  }
-                  onViewHistory={(c) => setHistoryContract(c)}
-                  onRemoveContract={handleRemoveContract}
-                  onOpenAddModal={() =>
-                    setContractModalState({
-                      isOpen: true,
-                      mode: 'add',
-                      contract: null,
-                    })
-                  }
-                />
-              </SectionSafeBoundary>
-
               <SectionSafeBoundary name="Analytics Charts" resetKey={animKey}>
                 <AnalyticsCharts
-                  contracts={visibleTrackedContracts}
                   aersRecords={visibleAersRecords}
+                  aersMeta={aersMeta}
                   snapshots={monthlySnapshots}
                   isDark={isDark}
                   showSnapshotLedger={true}
@@ -2784,20 +2358,35 @@ export default function App() {
             </>
           )}
 
+          {activeNav === 'assign_user' && (
+            <SectionSafeBoundary name="Assign User Follow-Up Dashboard" resetKey={animKey}>
+              <StaffFollowUpMonitorPanel
+                aersRecords={aersRecords}
+                mrpMap={mrpMap}
+                assignments={staffAssignments}
+                isDark={isDark}
+                onAssignBulk={handleAssignStaffBulk}
+                onRemoveAssignment={handleRemoveStaffAssignment}
+                onClearStaffMonth={handleClearStaffMonth}
+              />
+            </SectionSafeBoundary>
+          )}
+
+          {activeNav === 'below_one' && (
+            <SectionSafeBoundary name="Below 1 — 90 Ratio Plan" resetKey={animKey}>
+              <BelowOneRatioPanel
+                aersRecords={visibleAersRecords}
+                aersMeta={aersMeta}
+                mrpMap={mrpMap}
+              />
+            </SectionSafeBoundary>
+          )}
+
           {activeNav === 'borderline' && (
             <SectionSafeBoundary name="Next Month Borderline" resetKey={animKey}>
               <NextMonthBorderlineCardsPanel
-                trackedContracts={visibleTrackedContracts}
                 aersRecords={visibleAersRecords}
                 mrpMap={mrpMap}
-                onAddFromMaster={handleAddFromMaster}
-                onLogVisit={(c) =>
-                  setContractModalState({
-                    isOpen: true,
-                    mode: 'log_visit',
-                    contract: c,
-                  })
-                }
               />
             </SectionSafeBoundary>
           )}
@@ -2805,10 +2394,8 @@ export default function App() {
           {activeNav === 'worst' && (
             <SectionSafeBoundary name="Worst Case Radar" resetKey={animKey}>
               <WorstCasePanel
-                trackedContracts={visibleTrackedContracts}
                 aersRecords={visibleAersRecords}
                 mrpMap={mrpMap}
-                onAddFromMaster={handleAddFromMaster}
               />
             </SectionSafeBoundary>
           )}
@@ -2821,31 +2408,6 @@ export default function App() {
                   aria-label="Recovery Tools Menu"
                   className="inline-flex flex-wrap items-center gap-1 p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xs"
                 >
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={toolsSubTab === 'staff_monitor'}
-                    onClick={() => setToolsSubTab('staff_monitor')}
-                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
-                      toolsSubTab === 'staff_monitor'
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    <ClipboardCheck className="w-3.5 h-3.5" />
-                    Staff Follow-Up &amp; Performance
-                    {staffAssignments.length > 0 && (
-                      <span
-                        className={`ml-1 px-1.5 py-0.5 text-[10px] font-mono rounded-md ${
-                          toolsSubTab === 'staff_monitor'
-                            ? 'bg-white/20 text-white'
-                            : 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
-                        }`}
-                      >
-                        {staffAssignments.length}
-                      </span>
-                    )}
-                  </button>
                   <button
                     type="button"
                     role="tab"
@@ -2877,20 +2439,6 @@ export default function App() {
                   <button
                     type="button"
                     role="tab"
-                    aria-selected={toolsSubTab === 'ai'}
-                    onClick={() => setToolsSubTab('ai')}
-                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
-                      toolsSubTab === 'ai'
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    <Bot className="w-3.5 h-3.5" />
-                    AI Agent &amp; Google Maps
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
                     aria-selected={toolsSubTab === 'alerts'}
                     onClick={() => setToolsSubTab('alerts')}
                     className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
@@ -2916,28 +2464,13 @@ export default function App() {
                 </div>
 
                 <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                  {monthlySnapshots.length} saved monthly snapshots
+                  {monthlySnapshots.length} daily/monthly snapshots saved
                 </span>
               </div>
-
-              {toolsSubTab === 'staff_monitor' && (
-                <SectionSafeBoundary name="Staff Follow-Up Monitor" resetKey={animKey}>
-                  <StaffFollowUpMonitorPanel
-                    aersRecords={aersRecords}
-                    trackedContracts={trackedContracts}
-                    assignments={staffAssignments}
-                    isDark={isDark}
-                    onAssignBulk={handleAssignStaffBulk}
-                    onRemoveAssignment={handleRemoveStaffAssignment}
-                    onClearStaffMonth={handleClearStaffMonth}
-                  />
-                </SectionSafeBoundary>
-              )}
 
               {toolsSubTab === 'office_breakdown' && (
                 <SectionSafeBoundary name="Office Type Breakdown" resetKey={animKey}>
                   <OfficeTypeBreakdownPanel
-                    trackedContracts={visibleTrackedContracts}
                     aersRecords={visibleAersRecords}
                     title="Office Type -> Officer Strategy Breakdown (NPL & Borderline)"
                   />
@@ -2950,28 +2483,8 @@ export default function App() {
                     aersRecords={visibleAersRecords}
                     aersMeta={aersMeta}
                     mrpMap={mrpMap}
-                    trackedContracts={visibleTrackedContracts}
                     monthlySnapshots={monthlySnapshots}
                     isDark={isDark}
-                    onAddFromMaster={handleAddFromMaster}
-                    onLogVisit={(c) =>
-                      setContractModalState({
-                        isOpen: true,
-                        mode: 'log_visit',
-                        contract: c,
-                      })
-                    }
-                  />
-                </SectionSafeBoundary>
-              )}
-
-              {toolsSubTab === 'ai' && (
-                <SectionSafeBoundary name="AI Recovery Agent" resetKey={animKey}>
-                  <AiRecoveryAgentPanel
-                    trackedContracts={visibleTrackedContracts}
-                    aersRecords={visibleAersRecords}
-                    aersMeta={aersMeta}
-                    openingBaseline={openingBaseline}
                   />
                 </SectionSafeBoundary>
               )}
@@ -2979,19 +2492,13 @@ export default function App() {
               {toolsSubTab === 'alerts' && (
                 <SectionSafeBoundary name="Alerts & Notifications" resetKey={animKey}>
                   <AlertsNotificationsPanel
-                    contracts={visibleTrackedContracts}
+                    aersRecords={visibleAersRecords}
+                    mrpMap={mrpMap}
                     prefs={notifPrefs}
                     permissionState={permissionState}
                     onUpdatePrefs={setNotifPrefs}
                     onRequestPermission={handleRequestNotifPermission}
                     onTestPopup={handleTestPopup}
-                    onLogVisit={(c) =>
-                      setContractModalState({
-                        isOpen: true,
-                        mode: 'log_visit',
-                        contract: c,
-                      })
-                    }
                   />
                 </SectionSafeBoundary>
               )}
@@ -3043,15 +2550,13 @@ export default function App() {
                     aersRecords={aersRecords}
                     aersMeta={aersMeta}
                     mrpMap={mrpMap}
-                    trackedContractNos={trackedContractNos}
                     onUploadAersFile={handleUploadAersFile}
-                    onAddFromMaster={handleAddFromMaster}
                   />
                 </SectionSafeBoundary>
               ) : (
                 <SectionSafeBoundary name="Backup & Settings" resetKey={animKey}>
                   <BackupSettingsPanel
-                    trackedCount={trackedContracts.length}
+                    staffAssignmentsCount={staffAssignments.length}
                     snapshotsCount={monthlySnapshots.length}
                     aersMeta={aersMeta}
                     isAdminAuthenticated={isAdmin}
@@ -3076,7 +2581,7 @@ export default function App() {
                 WG Pulse · Leasing &amp; Finance Recovery Control
               </div>
               <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                Admin Live Cloud Sync · Office Type → MO/RO Strategy · AI Strategist &amp; Google Maps
+                Admin Live Cloud Sync · Office Type → MO/RO Strategy · Below 1 (90 Ratio) &amp; Officer Effort Analytics
               </div>
             </div>
           </div>
@@ -3095,9 +2600,15 @@ export default function App() {
               </strong>
             </span>
             <span>
-              Watchlist:{' '}
+              90 Ratio:{' '}
+              <strong className="font-mono text-emerald-700 dark:text-emerald-400">
+                {aersAlertSummary.ratio90Pct.toFixed(1)}%
+              </strong>
+            </span>
+            <span>
+              Assign Follow-Ups:{' '}
               <strong className="font-mono text-slate-900 dark:text-slate-200">
-                {trackedContracts.length}
+                {staffAssignments.length}
               </strong>
             </span>
             <span>
@@ -3218,7 +2729,7 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Modals */}
+      {/* Admin Modal */}
       <AdminLoginModal
         isOpen={adminModalOpen}
         isAdminAuthenticated={isAdmin}
@@ -3227,7 +2738,7 @@ export default function App() {
           setAdminToken(token);
           showToast(
             'Admin Mode Unlocked',
-            'You can now upload AERS reports, edit watchlist contracts, and publish live updates to everyone.',
+            'You can now upload daily AERS reports, manage Assign User rosters, and publish live updates to everyone.',
             'success',
           );
         }}
@@ -3241,40 +2752,6 @@ export default function App() {
         }}
         onConfirmReset={handleAuthorizedReset}
         onForcePublishNow={handleForcePublishNow}
-      />
-
-      <ContractModal
-        isOpen={contractModalState.isOpen}
-        mode={contractModalState.mode}
-        initialContract={contractModalState.contract}
-        aersMap={aersMap}
-        mrpMap={mrpMap}
-        existingContractNos={trackedContractNos}
-        regularContractNos={regularContractNos}
-        onClose={() =>
-          setContractModalState({ isOpen: false, mode: 'add', contract: null })
-        }
-        onSaveSingle={handleSaveSingleContract}
-        onBulkAdd={handleBulkAddContracts}
-      />
-
-      <VisitHistoryModal
-        contract={historyContract}
-        onClose={() => setHistoryContract(null)}
-        onLogNewVisit={(c) =>
-          setContractModalState({
-            isOpen: true,
-            mode: 'log_visit',
-            contract: c,
-          })
-        }
-      />
-
-      <WhatsAppSyncModal
-        isOpen={waModalOpen}
-        trackedContracts={trackedContracts}
-        onClose={() => setWaModalOpen(false)}
-        onApplyMatches={handleApplyWhatsAppMatches}
       />
     </div>
   );

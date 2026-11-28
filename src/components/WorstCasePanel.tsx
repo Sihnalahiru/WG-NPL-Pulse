@@ -1,16 +1,13 @@
 import { useMemo, useState } from 'react';
 import {
   AlertOctagon,
-  CheckCircle2,
   Flame,
-  Plus,
   Search,
   ShieldAlert,
 } from 'lucide-react';
 import type {
   AersRecord,
   MrpEnrichment,
-  TrackedContract,
 } from '../types/recovery';
 import {
   analyzeWorstCategory,
@@ -18,39 +15,23 @@ import {
   formatCurrencyRs,
   normalizeContractNo,
   normalizeEvaluableFromAers,
-  normalizeEvaluableFromTracked,
 } from '../utils/recoveryEngine';
 import { PaymentPatternStrip } from './PaymentPatternStrip';
+import { UserAvatar } from './UserAvatar';
 import { WorstCaseProductBadge, getWorstProductMeta } from './WorstCaseProductBadge';
 
 interface WorstCasePanelProps {
-  trackedContracts: TrackedContract[];
   aersRecords: AersRecord[];
   mrpMap?: Map<string, MrpEnrichment>;
-  onAddFromMaster: (record: AersRecord) => void;
 }
 
+const EMPTY_SET = new Set<string>();
+
 export function WorstCasePanel({
-  trackedContracts,
   aersRecords,
   mrpMap,
-  onAddFromMaster,
 }: WorstCasePanelProps) {
-  const [scope, setScope] = useState<'aers' | 'tracked'>(
-    aersRecords.length > 0 ? 'aers' : 'tracked',
-  );
   const [search, setSearch] = useState('');
-
-  const trackedNos = useMemo(
-    () => new Set(trackedContracts.map((c) => normalizeContractNo(c.contractNo))),
-    [trackedContracts],
-  );
-
-  const trackedByNo = useMemo(() => {
-    const m = new Map<string, TrackedContract>();
-    trackedContracts.forEach((c) => m.set(normalizeContractNo(c.contractNo), c));
-    return m;
-  }, [trackedContracts]);
 
   const aersByNo = useMemo(() => {
     const m = new Map<string, AersRecord>();
@@ -58,12 +39,10 @@ export function WorstCasePanel({
     return m;
   }, [aersRecords]);
 
-  const evaluableItems = useMemo(() => {
-    if (scope === 'aers' && aersRecords.length > 0) {
-      return normalizeEvaluableFromAers(aersRecords, trackedNos);
-    }
-    return normalizeEvaluableFromTracked(trackedContracts);
-  }, [scope, aersRecords, trackedNos, trackedContracts]);
+  const evaluableItems = useMemo(
+    () => normalizeEvaluableFromAers(aersRecords, EMPTY_SET, mrpMap),
+    [aersRecords, mrpMap],
+  );
 
   const analysis = useMemo(
     () => analyzeWorstCategory(evaluableItems),
@@ -111,31 +90,9 @@ export function WorstCasePanel({
           </p>
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-950 rounded-lg shrink-0 self-start lg:self-center">
-          <button
-            type="button"
-            onClick={() => setScope('aers')}
-            disabled={aersRecords.length === 0}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap disabled:opacity-40 ${
-              scope === 'aers'
-                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            Full AERS ({aersRecords.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setScope('tracked')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-              scope === 'tracked'
-                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            Tracked Watchlist ({trackedContracts.length})
-          </button>
-        </div>
+        <span className="text-xs font-mono text-slate-500 dark:text-slate-400 shrink-0 tabular-nums">
+          AERS Scope: {aersRecords.length.toLocaleString()} records
+        </span>
       </div>
 
       {/* Worst Summary Metrics */}
@@ -195,7 +152,7 @@ export function WorstCasePanel({
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                WORST Category Contracts Preview ({filteredAccounts.length})
+                WORST Category Contracts ({filteredAccounts.length})
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 Includes all Npl Reason = W contracts across every DPD bracket with product-matched SVG indicators
@@ -244,7 +201,7 @@ export function WorstCasePanel({
               No WORST (W) category contracts found in the current selection
             </p>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              Upload or paste your daily AERS report containing the &ldquo;Npl Reason&rdquo; column with &ldquo;W&rdquo; entries to preview them here.
+              Upload your daily AERS report containing the &ldquo;Npl Reason&rdquo; column with &ldquo;W&rdquo; entries to inspect them here.
             </p>
           </div>
         ) : (
@@ -259,15 +216,13 @@ export function WorstCasePanel({
                   <th className="py-2.5 px-3 text-right">Op Npl</th>
                   <th className="py-2.5 px-3 text-right">Closing NPL</th>
                   <th className="py-2.5 px-3 text-right">Closing Debtor</th>
-                  <th className="py-2.5 px-3 text-right">Officer Efforts</th>
-                  <th className="py-2.5 px-4 text-right">Watchlist</th>
+                  <th className="py-2.5 px-4 text-right">Officer Efforts</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800 tabular-nums">
                 {filteredAccounts.map((item) => {
                   const normNo = normalizeContractNo(item.contractNo);
                   const masterRec = aersByNo.get(normNo);
-                  const trackedRec = trackedByNo.get(normNo);
                   return (
                     <tr
                       key={item.contractNo}
@@ -281,26 +236,25 @@ export function WorstCasePanel({
                           {item.cusName}
                         </div>
                         <PaymentPatternStrip
-                          mrp={mrpMap?.get(normNo) ?? trackedRec?.mrp}
-                          lastPaidAmount={
-                            masterRec?.lastPaidAmount ?? trackedRec?.lastPaidAmount
-                          }
-                          lastPayDate={
-                            masterRec?.lastPayDate ?? trackedRec?.lastPayDate
-                          }
-                          totalCollection={
-                            masterRec?.totalCollection ?? trackedRec?.totalCollection
-                          }
+                          mrp={mrpMap?.get(normNo)}
+                          lastPaidAmount={masterRec?.lastPaidAmount}
+                          lastPayDate={masterRec?.lastPayDate}
+                          totalCollection={masterRec?.totalCollection}
                           showCategoryLine={true}
                           compact={true}
                         />
                       </td>
                       <td className="py-2.5 px-3">
-                        <div className="font-medium text-slate-900 dark:text-slate-100">
-                          {item.officeType}
-                        </div>
-                        <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                          RO: {item.officer} {item.vehicleNo ? `· ${item.vehicleNo}` : ''}
+                        <div className="flex items-center gap-2">
+                          <UserAvatar name={item.officer} sizeClass="w-7 h-7 text-[10px]" />
+                          <div>
+                            <div className="font-medium text-slate-900 dark:text-slate-100">
+                              {item.officer}
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                              {item.officeType} {item.vehicleNo ? `· ${item.vehicleNo}` : ''}
+                            </div>
+                          </div>
                         </div>
                       </td>
                       <td className="py-2.5 px-3">
@@ -337,12 +291,12 @@ export function WorstCasePanel({
                       <td className="py-2.5 px-3 text-right font-mono text-slate-900 dark:text-slate-100">
                         {formatCurrencyRs(item.closingDebtor)}
                       </td>
-                      <td className="py-2.5 px-3 text-right font-mono">
+                      <td className="py-2.5 px-4 text-right font-mono">
                         <span
                           className={
                             item.assignOfficerEfforts <= 0
                               ? 'text-red-600 dark:text-red-400 font-semibold'
-                              : 'text-slate-900 dark:text-slate-100'
+                              : 'text-slate-900 dark:text-slate-100 font-semibold'
                           }
                         >
                           {item.assignOfficerEfforts}
@@ -350,25 +304,6 @@ export function WorstCasePanel({
                         <span className="block text-[11px] text-slate-400">
                           Total: {item.totalEfforts}
                         </span>
-                      </td>
-                      <td className="py-2.5 px-4 text-right whitespace-nowrap">
-                        {item.isTracked ? (
-                          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            Tracked
-                          </span>
-                        ) : masterRec ? (
-                          <button
-                            type="button"
-                            onClick={() => onAddFromMaster(masterRec)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded bg-blue-600 text-white hover:bg-blue-700"
-                          >
-                            <Plus className="w-3 h-3" />
-                            Track
-                          </button>
-                        ) : (
-                          '—'
-                        )}
                       </td>
                     </tr>
                   );

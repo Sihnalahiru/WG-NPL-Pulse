@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   Bar,
   BarChart,
@@ -19,7 +19,6 @@ import type {
   AersRecord,
   MrpEnrichment,
   OpeningOfficerBaseline,
-  TrackedContract,
 } from '../types/recovery';
 import {
   analyzeNextMonthBorderline,
@@ -28,23 +27,18 @@ import {
   computeOfficerOpeningClosing,
   formatCompactRs,
   formatCurrencyRs,
-  normalizeContractNo,
   normalizeEvaluableFromAers,
-  normalizeEvaluableFromTracked,
 } from '../utils/recoveryEngine';
 import { FinancePortfolioIllustration } from './FinanceIllustrations';
 import { OfficerEffortSummaryPanel } from './OfficerEffortSummaryPanel';
 import { UserAvatar } from './UserAvatar';
 
 interface TrendsEvaluationPanelProps {
-  trackedContracts: TrackedContract[];
   aersRecords: AersRecord[];
   aersMeta: AersMetadata | null;
   mrpMap?: Map<string, MrpEnrichment>;
   openingBaseline: OpeningOfficerBaseline | null;
   isDark: boolean;
-  onUploadAersFile?: (file: File) => void;
-  onPasteAersText?: (rawText: string) => void;
   onSetCurrentAsOpening: () => void;
   onOpenWorstRadar?: () => void;
   onOpenBorderlineCards?: () => void;
@@ -58,8 +52,9 @@ const BUCKET_COLORS: Record<string, string> = {
   '91+': '#dc2626',
 };
 
+const EMPTY_SET = new Set<string>();
+
 export function TrendsEvaluationPanel({
-  trackedContracts,
   aersRecords,
   aersMeta,
   mrpMap,
@@ -69,21 +64,10 @@ export function TrendsEvaluationPanel({
   onOpenWorstRadar,
   onOpenBorderlineCards,
 }: TrendsEvaluationPanelProps) {
-  const [scope, setScope] = useState<'tracked' | 'aers'>(
-    aersRecords.length > 0 ? 'aers' : 'tracked',
+  const evaluableItems = useMemo(
+    () => normalizeEvaluableFromAers(aersRecords, EMPTY_SET, mrpMap),
+    [aersRecords, mrpMap],
   );
-
-  const trackedNos = useMemo(
-    () => new Set(trackedContracts.map((c) => normalizeContractNo(c.contractNo))),
-    [trackedContracts],
-  );
-
-  const evaluableItems = useMemo(() => {
-    if (scope === 'aers' && aersRecords.length > 0) {
-      return normalizeEvaluableFromAers(aersRecords, trackedNos, mrpMap);
-    }
-    return normalizeEvaluableFromTracked(trackedContracts);
-  }, [scope, aersRecords, trackedNos, mrpMap, trackedContracts]);
 
   const ageBuckets = useMemo(
     () => computeDpdAgeBuckets(evaluableItems),
@@ -101,21 +85,19 @@ export function TrendsEvaluationPanel({
   );
 
   const officerRows = useMemo(
-    () =>
-      computeOfficerOpeningClosing(
-        evaluableItems,
-        scope === 'aers' ? openingBaseline : null,
-      ),
-    [evaluableItems, openingBaseline, scope],
+    () => computeOfficerOpeningClosing(evaluableItems, openingBaseline),
+    [evaluableItems, openingBaseline],
   );
 
   const officerTotals = useMemo(() => {
     return officerRows.reduce(
       (acc, r) => ({
         openingCount: acc.openingCount + r.openingCount,
+        openingNplCount: acc.openingNplCount + r.openingNplCount,
         openingDebtor: acc.openingDebtor + r.openingDebtor,
         openingNpl: acc.openingNpl + r.openingNpl,
         closingCount: acc.closingCount + r.closingCount,
+        closingNplCount: acc.closingNplCount + r.closingNplCount,
         closingDebtor: acc.closingDebtor + r.closingDebtor,
         closingNpl: acc.closingNpl + r.closingNpl,
         forecastedBorderCount:
@@ -138,9 +120,11 @@ export function TrendsEvaluationPanel({
       }),
       {
         openingCount: 0,
+        openingNplCount: 0,
         openingDebtor: 0,
         openingNpl: 0,
         closingCount: 0,
+        closingNplCount: 0,
         closingDebtor: 0,
         closingNpl: 0,
         forecastedBorderCount: 0,
@@ -176,56 +160,33 @@ export function TrendsEvaluationPanel({
               Daily Age Evaluation &amp; Borderline Risk Engine
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
-              Age buckets, next-month borderline exposure, and per-officer Opening vs. Closing tables update automatically when you upload an AERS report.
+              Age buckets, next-month borderline exposure, and BM-reconciled Opening vs. Closing NPL per officer update automatically from your daily AERS report.
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 dark:text-slate-300 tabular-nums">
               <span>
-                Opening Baseline:{' '}
-                <span className="font-mono">
-                  {openingBaseline?.printedDateTime || 'Using report OP_BAL / Op Npl'}
-                </span>
+                Opening NPL:{' '}
+                <strong className="font-mono text-slate-900 dark:text-slate-100">
+                  {officerTotals.openingNplCount} accts · {formatCompactRs(officerTotals.openingNpl)}
+                </strong>
               </span>
               <span aria-hidden="true">·</span>
               <span>
-                Latest Closing:{' '}
+                Closing NPL:{' '}
+                <strong className="font-mono text-red-600 dark:text-red-400">
+                  {officerTotals.closingNplCount} accts · {formatCompactRs(officerTotals.closingNpl)}
+                </strong>
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>
+                Report:{' '}
                 <span className="font-mono">
                   {aersMeta?.printedDateTime || 'No AERS loaded yet'}
                 </span>
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="text-emerald-700 dark:text-emerald-400">
-                Single-copy replace-on-upload active
               </span>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-950 rounded-lg">
-              <button
-                type="button"
-                onClick={() => setScope('tracked')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                  scope === 'tracked'
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                Tracked Watchlist ({trackedContracts.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setScope('aers')}
-                disabled={aersRecords.length === 0}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap disabled:opacity-40 ${
-                  scope === 'aers'
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                }`}
-              >
-                NPL &amp; Borderline AERS ({aersRecords.length})
-              </button>
-            </div>
-
             {aersRecords.length > 0 && (
               <button
                 type="button"
@@ -247,7 +208,7 @@ export function TrendsEvaluationPanel({
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
             <div>
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                DPD Age Bucket Distribution ({scope === 'aers' ? 'Full AERS' : 'Tracked Contracts'})
+                DPD Age Bucket Distribution (AERS Portfolio)
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 Contract count across delinquency clusters (61-90 DPD highlights next-month NPL risk)
@@ -261,7 +222,7 @@ export function TrendsEvaluationPanel({
           {evaluableItems.length === 0 ? (
             <div className="h-64 flex flex-col items-center justify-center text-center text-xs text-slate-500 dark:text-slate-400 border border-dashed border-slate-200 dark:border-slate-800 rounded-lg px-4">
               <FinancePortfolioIllustration className="w-44 h-auto mb-2" />
-              No contracts to display yet. Upload an Age Evaluation report or add tracked contracts.
+              No contracts to display yet. Upload an Age Evaluation report to populate charts.
             </div>
           ) : (
             <>
@@ -472,12 +433,11 @@ export function TrendsEvaluationPanel({
         </div>
       </div>
 
-      {/* Officer Field Visit Efforts on Borderline & NPL grouped by RO & Office Type */}
+      {/* Officer Efforts & Age-Group Breakdown */}
       <OfficerEffortSummaryPanel
         aersRecords={aersRecords}
-        trackedContracts={trackedContracts}
+        aersMeta={aersMeta}
         mrpMap={mrpMap}
-        defaultScope={scope}
       />
 
       {/* Per-Officer Opening vs Closing Evaluation Table */}
@@ -485,10 +445,10 @@ export function TrendsEvaluationPanel({
         <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
             <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Per-Officer Opening vs. Closing Summary
+              Per-Officer Opening vs. Closing NPL Summary (BM Reconciled)
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Automatically compares Opening position against latest Closing Age Evaluation per Recovery Officer
+              Compares Opening NPL (Op Npl &gt; 0) against Closing NPL (NPL &gt; 0) per Recovery Officer with exact contract counts.
             </p>
           </div>
           <span className="text-xs font-mono text-slate-500 dark:text-slate-400 tabular-nums">
@@ -506,7 +466,7 @@ export function TrendsEvaluationPanel({
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
                   <th className="py-2.5 px-4">Recovery Officer</th>
-                  <th className="py-2.5 px-3 text-right">Op Npl</th>
+                  <th className="py-2.5 px-3 text-right">Opening NPL</th>
                   <th className="py-2.5 px-3 text-right">Forecasted Border</th>
                   <th className="py-2.5 px-3 text-right">Moved to NPL</th>
                   <th className="py-2.5 px-3 text-right">Border Saving</th>
@@ -534,13 +494,16 @@ export function TrendsEvaluationPanel({
                           <div>
                             <span>{row.officer}</span>
                             <span className="block text-[10px] font-normal text-slate-500 dark:text-slate-400">
-                              {row.openingCount} open · {row.closingCount} close
+                              {row.closingCount} risk accts
                             </span>
                           </div>
                         </div>
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-900 dark:text-slate-100">
                         {formatCurrencyRs(row.openingNpl)}
+                        <span className="block text-[10px] text-slate-500 dark:text-slate-400">
+                          {row.openingNplCount} accts
+                        </span>
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-700 dark:text-slate-300">
                         {formatCurrencyRs(row.forecastedBorderAmount)}
@@ -571,6 +534,9 @@ export function TrendsEvaluationPanel({
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono font-semibold text-red-600 dark:text-red-400">
                         {formatCurrencyRs(row.closingNpl)}
+                        <span className="block text-[10px] font-normal">
+                          {row.closingNplCount} accts
+                        </span>
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono text-amber-700 dark:text-amber-400">
                         {row.borderlineCount}
@@ -628,6 +594,9 @@ export function TrendsEvaluationPanel({
                   </td>
                   <td className="py-2.5 px-3 text-right font-mono">
                     {formatCurrencyRs(officerTotals.openingNpl)}
+                    <span className="block text-[10px] font-normal text-slate-500 dark:text-slate-400">
+                      {officerTotals.openingNplCount} accts
+                    </span>
                   </td>
                   <td className="py-2.5 px-3 text-right font-mono">
                     {formatCurrencyRs(officerTotals.forecastedBorderAmount)}
@@ -658,6 +627,9 @@ export function TrendsEvaluationPanel({
                   </td>
                   <td className="py-2.5 px-3 text-right font-mono text-red-600 dark:text-red-400">
                     {formatCurrencyRs(officerTotals.closingNpl)}
+                    <span className="block text-[10px] font-normal">
+                      {officerTotals.closingNplCount} accts
+                    </span>
                   </td>
                   <td className="py-2.5 px-3 text-right font-mono text-amber-700 dark:text-amber-400">
                     {officerTotals.borderlineCount}
