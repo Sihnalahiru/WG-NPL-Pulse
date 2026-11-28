@@ -1,7 +1,23 @@
-import { useState } from 'react';
-import { CheckCircle2, CloudUpload, KeyRound, Lock, ShieldCheck, Trash2, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import {
+  CheckCircle2,
+  CloudUpload,
+  Infinity as InfinityIcon,
+  KeyRound,
+  Lock,
+  RefreshCw,
+  ShieldCheck,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { SecurityVaultIllustration } from './FinanceIllustrations';
-import { getSavedGithubToken, saveGithubToken } from '../utils/githubSync';
+import {
+  getMaskedGithubTokenPreview,
+  hasConfiguredGithubToken,
+  hydratePermanentGithubToken,
+  saveGithubToken,
+  subscribeGithubTokenChange,
+} from '../utils/githubSync';
 
 interface AdminLoginModalProps {
   isOpen: boolean;
@@ -26,11 +42,27 @@ export function AdminLoginModal({
   onForcePublishNow,
 }: AdminLoginModalProps) {
   const [password, setPassword] = useState('');
-  const [ghToken, setGhToken] = useState(() => getSavedGithubToken());
+  const [hasPermanentToken, setHasPermanentToken] = useState(() =>
+    hasConfiguredGithubToken(),
+  );
+  const [maskedToken, setMaskedToken] = useState(() =>
+    getMaskedGithubTokenPreview(),
+  );
+  const [ghTokenInput, setGhTokenInput] = useState('');
+  const [isReplacingToken, setIsReplacingToken] = useState(false);
   const [ghSavedFeedback, setGhSavedFeedback] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [confirmResetChecked, setConfirmResetChecked] = useState(false);
+
+  useEffect(() => {
+    const syncTokenState = () => {
+      setHasPermanentToken(hasConfiguredGithubToken());
+      setMaskedToken(getMaskedGithubTokenPreview());
+    };
+    hydratePermanentGithubToken().then(syncTokenState).catch(() => {});
+    return subscribeGithubTokenChange(syncTokenState);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -83,9 +115,19 @@ export function AdminLoginModal({
   };
 
   const handleSaveGhToken = () => {
-    saveGithubToken(ghToken);
+    const clean = ghTokenInput.trim();
+    if (!clean) {
+      setErrorMsg('Please paste a valid GitHub Personal Access Token.');
+      return;
+    }
+    setErrorMsg(null);
+    saveGithubToken(clean);
+    setGhTokenInput('');
+    setIsReplacingToken(false);
+    setHasPermanentToken(true);
+    setMaskedToken(getMaskedGithubTokenPreview());
     setGhSavedFeedback(true);
-    setTimeout(() => setGhSavedFeedback(false), 3000);
+    setTimeout(() => setGhSavedFeedback(false), 4000);
   };
 
   const handlePublishClick = async () => {
@@ -93,7 +135,11 @@ export function AdminLoginModal({
     setLoading(true);
     setErrorMsg(null);
     try {
-      saveGithubToken(ghToken);
+      if (ghTokenInput.trim()) {
+        saveGithubToken(ghTokenInput);
+        setGhTokenInput('');
+        setIsReplacingToken(false);
+      }
       await onForcePublishNow();
     } catch (err) {
       setErrorMsg(
@@ -120,6 +166,8 @@ export function AdminLoginModal({
       setLoading(false);
     }
   };
+
+  const showTokenSetupForm = !hasPermanentToken || isReplacingToken;
 
   return (
     <div
@@ -224,38 +272,103 @@ export function AdminLoginModal({
                 </button>
               </div>
 
-              {/* GitHub Live Cloud Sync Configuration */}
-              <div className="p-4 rounded-xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 space-y-3">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-900 dark:text-blue-200">
-                  <KeyRound className="w-3.5 h-3.5 text-blue-600" />
-                  GitHub Live Cloud Sync (Everyone View)
-                </div>
-                <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-                  Paste your GitHub Personal Access Token (with <code>repo</code> scope) once. Whenever you upload an AERS Excel file, it automatically publishes live to all users.
-                </p>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="password"
-                    value={ghToken}
-                    onChange={(e) => setGhToken(e.target.value)}
-                    placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                    className="flex-1 px-3 py-1.5 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleSaveGhToken}
-                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 text-white hover:bg-slate-700 whitespace-nowrap"
+              {/* GitHub Live Cloud Sync — Permanent One-Time Setup Rule */}
+              <div
+                className={`p-4 rounded-xl border space-y-3 ${
+                  hasPermanentToken && !isReplacingToken
+                    ? 'bg-emerald-50/60 dark:bg-emerald-950/25 border-emerald-200 dark:border-emerald-900/70'
+                    : 'bg-blue-50/70 dark:bg-blue-950/30 border-blue-200 dark:border-blue-900'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div
+                    className={`flex items-center gap-1.5 text-xs font-semibold ${
+                      hasPermanentToken && !isReplacingToken
+                        ? 'text-emerald-900 dark:text-emerald-200'
+                        : 'text-blue-900 dark:text-blue-200'
+                    }`}
                   >
-                    Save Token
-                  </button>
+                    {hasPermanentToken && !isReplacingToken ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    ) : (
+                      <KeyRound className="w-3.5 h-3.5 text-blue-600" />
+                    )}
+                    {hasPermanentToken && !isReplacingToken
+                      ? 'Permanent Live Sync Connected'
+                      : 'One-Time GitHub Live Sync Setup'}
+                  </div>
+
+                  {hasPermanentToken && !isReplacingToken && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold">
+                      <InfinityIcon className="w-3 h-3" />
+                      Never Expires
+                    </span>
+                  )}
                 </div>
+
+                {!showTokenSetupForm ? (
+                  <div className="space-y-2.5">
+                    <p className="text-[11px] text-emerald-900/85 dark:text-emerald-200/85 leading-relaxed">
+                      Your GitHub token is permanently saved in the dual browser vault (<code>localStorage + IndexedDB</code>). It will <strong>never expire</strong> and will <strong>never ask again</strong> — every file upload auto-publishes live to all URL &amp; Windows PC App users.
+                    </p>
+                    <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-white/80 dark:bg-slate-950/80 border border-emerald-200/80 dark:border-emerald-900/60 text-[11px]">
+                      <span className="font-mono text-slate-700 dark:text-slate-300">
+                        Saved Key: <strong>{maskedToken}</strong>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIsReplacingToken(true)}
+                        className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        Replace
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                      Add your GitHub Personal Access Token (<code>repo</code> scope, set to <strong>No expiration</strong> on GitHub) <strong>once</strong>. After saving, WG Pulse locks it permanently and never asks for it again.
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="password"
+                        value={ghTokenInput}
+                        onChange={(e) => setGhTokenInput(e.target.value)}
+                        placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                        className="flex-1 px-3 py-1.5 text-xs font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSaveGhToken}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 text-white hover:bg-slate-700 whitespace-nowrap"
+                      >
+                        Save Permanently
+                      </button>
+                    </div>
+                    {isReplacingToken && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsReplacingToken(false);
+                          setGhTokenInput('');
+                        }}
+                        className="text-[11px] text-slate-500 hover:underline"
+                      >
+                        Cancel (keep existing permanent token)
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {ghSavedFeedback && (
-                  <p className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
-                    <CheckCircle2 className="w-3 h-3" />
-                    Token saved on this Admin browser.
+                  <p className="inline-flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Token locked permanently — will never expire or ask again.
                   </p>
                 )}
-                {onForcePublishNow && ghToken.trim() && (
+
+                {onForcePublishNow && (hasPermanentToken || ghTokenInput.trim()) && (
                   <button
                     type="button"
                     disabled={loading}
@@ -274,7 +387,7 @@ export function AdminLoginModal({
                   Total App Reset (Clear All Data)
                 </div>
                 <p className="text-xs text-red-700/90 dark:text-red-300/90 leading-relaxed">
-                  This clears all AERS Master Lookup data, Assign User Follow-Up rosters, Opening Baseline, and Daily/Monthly Snapshots from WG Pulse.
+                  This clears all AERS Master Lookup data, Assign User Follow-Up rosters, Opening Baseline, and Daily/Monthly Snapshots from WG Pulse. Your permanent GitHub Live Sync token remains safely preserved.
                 </p>
                 <label className="flex items-start gap-2 text-xs text-slate-800 dark:text-slate-200 cursor-pointer">
                   <input

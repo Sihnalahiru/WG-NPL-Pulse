@@ -67,6 +67,18 @@ export default defineConfig(() => {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           runtimeCaching: [
             {
+              urlPattern: /live-pulse-data\.json/i,
+              handler: 'NetworkOnly',
+            },
+            {
+              urlPattern: /^https:\/\/(api\.github\.com|raw\.githubusercontent\.com)\/repos\/Sihnalahiru\/WG-NPL-Pulse\/.*/i,
+              handler: 'NetworkOnly',
+            },
+            {
+              urlPattern: /^https:\/\/raw\.githubusercontent\.com\/Sihnalahiru\/WG-NPL-Pulse\/.*/i,
+              handler: 'NetworkOnly',
+            },
+            {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
               handler: 'CacheFirst',
               options: {

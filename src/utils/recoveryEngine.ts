@@ -136,6 +136,52 @@ export function getTodayISO(): string {
   return `${y}-${m}-${d}`;
 }
 
+export interface SystemActiveDateTime {
+  isoTimestamp: string;
+  systemDate: string;
+  systemTime: string;
+  systemTime12h: string;
+  systemDateTime: string;
+  displayLabel: string;
+  timeZone: string;
+}
+
+export function captureSystemActiveDateTime(
+  now: Date = new Date(),
+): SystemActiveDateTime {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const hh24 = now.getHours();
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+
+  const systemDate = `${y}-${m}-${d}`;
+  const systemTime = `${String(hh24).padStart(2, '0')}:${mm}:${ss}`;
+  const ampm = hh24 >= 12 ? 'PM' : 'AM';
+  const hh12 = hh24 % 12 === 0 ? 12 : hh24 % 12;
+  const systemTime12h = `${String(hh12).padStart(2, '0')}:${mm}:${ss} ${ampm}`;
+  const systemDateTime = `${systemDate} ${systemTime}`;
+  const displayLabel = `${systemDate} · ${systemTime12h}`;
+
+  let timeZone = 'Local';
+  try {
+    timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
+  } catch {
+    timeZone = 'Local';
+  }
+
+  return {
+    isoTimestamp: now.toISOString(),
+    systemDate,
+    systemTime,
+    systemTime12h,
+    systemDateTime,
+    displayLabel,
+    timeZone,
+  };
+}
+
 export function formatCurrencyRs(amount: number): string {
   const safe = Number.isFinite(amount) ? amount : 0;
   return `Rs. ${safe.toLocaleString('en-LK', {
@@ -522,21 +568,19 @@ function parseAersRows(
     throw new Error('No rows found in the provided AERS data.');
   }
 
-  let printedDateTime = '';
+  let excelPrintedDateTime = '';
   for (let r = 0; r < Math.min(4, rows.length); r++) {
     const joined = (rows[r] || []).map((c) => String(c ?? '')).join(' ');
     const match = joined.match(
       /Printed\s+Date\s+and\s+Time\s*:?\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)/i,
     );
     if (match) {
-      printedDateTime = match[1].trim();
+      excelPrintedDateTime = match[1].trim();
       break;
     }
   }
-  if (!printedDateTime) {
-    const now = new Date();
-    printedDateTime = `${getTodayISO()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:00`;
-  }
+  const activeSys = captureSystemActiveDateTime();
+  const printedDateTime = activeSys.systemDateTime;
 
   let headerRowIdx = -1;
   for (let r = 0; r < Math.min(8, rows.length); r++) {
@@ -660,7 +704,11 @@ function parseAersRows(
     metadata: {
       fileName,
       printedDateTime,
-      uploadedAt: new Date().toISOString(),
+      excelPrintedDateTime: excelPrintedDateTime || undefined,
+      uploadedAt: activeSys.isoTimestamp,
+      systemDate: activeSys.systemDate,
+      systemTime: activeSys.systemTime,
+      systemTimeZone: activeSys.timeZone,
       totalContractsCount: records.length,
       isSampleData: false,
     },
@@ -4095,12 +4143,13 @@ export function buildDailyAersSnapshot(
     0,
   );
 
+  const activeSys = captureSystemActiveDateTime();
   return {
     id: `snap_${snapDate}`,
     label,
     monthKey,
     snapshotDate: snapDate,
-    uploadedAt: new Date().toISOString(),
+    uploadedAt: activeSys.isoTimestamp,
     trackedCount: totalPortfolioCount,
     trackedDebtor: branchDebtor,
     trackedNpl: closingNpl,

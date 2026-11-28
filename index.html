@@ -72,7 +72,9 @@
           const text = `${source || ''} ${stack || ''} ${message || ''}`;
           return (
             /(?:chrome|moz|safari|safari-web|edge)-extension:\/\//i.test(text) ||
-            /Cannot set property fetch of #<Window>/i.test(text)
+            /Cannot set property fetch of #<Window>/i.test(text) ||
+            /WebSocket closed without opened/i.test(text) ||
+            /@vite\/client/i.test(text)
           );
         };
 

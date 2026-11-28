@@ -219,7 +219,11 @@ export interface BelowThreeCollectionSnapshot {
 export interface AersMetadata {
   fileName: string;
   printedDateTime: string;
+  excelPrintedDateTime?: string;
   uploadedAt: string;
+  systemDate?: string;
+  systemTime?: string;
+  systemTimeZone?: string;
   totalContractsCount: number;
   excludedRegularCount?: number;
   isSampleData: boolean;
@@ -631,6 +635,37 @@ export interface StaffAssignedContract {
   note?: string;
 }
 
+export interface FileUploadHistoryEntry {
+  id: string;
+  fileName: string;
+  fileType: 'AERS Workbook' | 'JSON Backup Restore' | 'Manual Live Publish';
+  fileSizeBytes?: number;
+  uploadedAtIso: string;
+  systemDate: string;
+  systemTime: string;
+  systemDateTimeLabel: string;
+  timeZone: string;
+  excelPrintedDateTime?: string;
+  recordsCount: number;
+  totalPortfolioCount?: number;
+  nplCount?: number;
+  closingNplAmount?: number;
+  snapshotAction?: string;
+  cloudSyncStatus: 'published_live' | 'local_only' | 'sync_failed';
+  cloudSyncNote?: string;
+  uploadedBy: string;
+}
+
+export interface WeeklyBackupSchedule {
+  enabled: boolean;
+  dayOfWeek: number; // 0 = Sunday .. 6 = Saturday
+  timeOfDay: string; // "HH:MM" (24h local time)
+  lastBackupAtIso?: string;
+  lastBackupDisplay?: string;
+  lastPromptedSlotKey?: string;
+  snoozedUntilIso?: string;
+}
+
 export interface BackupPayload {
   version: number;
   exportedAt: string;
@@ -640,5 +675,7 @@ export interface BackupPayload {
   aersMasterList: AersRecord[];
   openingBaseline?: OpeningOfficerBaseline | null;
   staffAssignments?: StaffAssignedContract[];
+  uploadHistory?: FileUploadHistoryEntry[];
+  weeklyBackupSchedule?: WeeklyBackupSchedule;
   notificationPrefs: NotificationPreferences;
 }

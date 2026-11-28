@@ -16,6 +16,7 @@ import {
   Flame,
   Globe,
   HardDriveDownload,
+  History,
   Landmark,
   Lock,
   Moon,
@@ -51,6 +52,8 @@ import {
   UniversalSnapshotManager,
   type SnapshotMode,
 } from './components/UniversalSnapshotManager';
+import { UploadHistoryPanel } from './components/UploadHistoryPanel';
+import { WeeklyBackupPromptModal } from './components/WeeklyBackupPromptModal';
 import { WorstCasePanel } from './components/WorstCasePanel';
 import { XpRewardsHubPanel } from './components/XpRewardsHubPanel';
 import { useLanguage, type AppLanguage } from './contexts/LanguageContext';
@@ -58,6 +61,7 @@ import type {
   AersMetadata,
   AersRecord,
   BackupPayload,
+  FileUploadHistoryEntry,
   MonthlySnapshot,
   MrpEnrichment,
   MrpPaymentMonth,
@@ -65,11 +69,13 @@ import type {
   NotificationPreferences,
   OpeningOfficerBaseline,
   StaffAssignedContract,
+  WeeklyBackupSchedule,
 } from './types/recovery';
 import {
   analyzeNextMonthBorderline,
   buildDailyAersSnapshot,
   buildOpeningOfficerBaseline,
+  captureSystemActiveDateTime,
   computeOfficeTypeBreakdown,
   formatCompactRs,
   getDaysRemainingTo30th,
@@ -87,9 +93,14 @@ import {
 import type { ParsedAersResult } from './utils/recoveryEngine';
 import {
   fetchLiveCloudData,
-  getSavedGithubToken,
+  hydratePermanentGithubToken,
   publishLiveCloudData,
+  subscribeLocalTabUpdates,
 } from './utils/githubSync';
+import {
+  DEFAULT_WEEKLY_BACKUP_SCHEDULE,
+  evaluateWeeklyBackupSchedule,
+} from './utils/weeklyBackup';
 
 const STORAGE_KEYS = {
   TRACKED: 'wg_v2_tracked_contracts',
@@ -99,6 +110,8 @@ const STORAGE_KEYS = {
   OPENING_BASELINE: 'wg_v2_opening_baseline',
   SNAPSHOTS: 'wg_v2_monthly_snapshots',
   STAFF_ASSIGNMENTS: 'wg_v2_staff_assignments',
+  UPLOAD_HISTORY: 'wg_v2_upload_history',
+  WEEKLY_BACKUP: 'wg_v2_weekly_backup_schedule',
   NOTIF_PREFS: 'wg_v2_notification_prefs',
   THEME: 'wg_v2_theme',
 };
@@ -712,6 +725,83 @@ function sanitizeOpeningBaseline(
   }).data;
 }
 
+function sanitizeUploadHistoryList(
+  raw: unknown,
+): FileUploadHistoryEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const validTypes = new Set([
+    'AERS Workbook',
+    'JSON Backup Restore',
+    'Manual Live Publish',
+  ]);
+  const validStatuses = new Set(['published_live', 'local_only', 'sync_failed']);
+  const result: FileUploadHistoryEntry[] = [];
+  for (const item of raw) {
+    if (!isPlainObject(item)) continue;
+    const id = typeof item.id === 'string' && item.id ? item.id : `upl_${result.length}`;
+    const fileName =
+      typeof item.fileName === 'string' && item.fileName
+        ? item.fileName
+        : 'Uploaded File';
+    const fileType = validTypes.has(String(item.fileType))
+      ? (item.fileType as FileUploadHistoryEntry['fileType'])
+      : 'AERS Workbook';
+    const cloudSyncStatus = validStatuses.has(String(item.cloudSyncStatus))
+      ? (item.cloudSyncStatus as FileUploadHistoryEntry['cloudSyncStatus'])
+      : 'local_only';
+    result.push({
+      id,
+      fileName,
+      fileType,
+      fileSizeBytes:
+        typeof item.fileSizeBytes === 'number' && Number.isFinite(item.fileSizeBytes)
+          ? item.fileSizeBytes
+          : undefined,
+      uploadedAtIso:
+        typeof item.uploadedAtIso === 'string' ? item.uploadedAtIso : '',
+      systemDate: typeof item.systemDate === 'string' ? item.systemDate : '',
+      systemTime: typeof item.systemTime === 'string' ? item.systemTime : '',
+      systemDateTimeLabel:
+        typeof item.systemDateTimeLabel === 'string'
+          ? item.systemDateTimeLabel
+          : `${String(item.systemDate || '')} ${String(item.systemTime || '')}`.trim(),
+      timeZone: typeof item.timeZone === 'string' ? item.timeZone : 'Local',
+      excelPrintedDateTime:
+        typeof item.excelPrintedDateTime === 'string'
+          ? item.excelPrintedDateTime
+          : undefined,
+      recordsCount:
+        typeof item.recordsCount === 'number' && Number.isFinite(item.recordsCount)
+          ? item.recordsCount
+          : 0,
+      totalPortfolioCount:
+        typeof item.totalPortfolioCount === 'number' &&
+        Number.isFinite(item.totalPortfolioCount)
+          ? item.totalPortfolioCount
+          : undefined,
+      nplCount:
+        typeof item.nplCount === 'number' && Number.isFinite(item.nplCount)
+          ? item.nplCount
+          : undefined,
+      closingNplAmount:
+        typeof item.closingNplAmount === 'number' &&
+        Number.isFinite(item.closingNplAmount)
+          ? item.closingNplAmount
+          : undefined,
+      snapshotAction:
+        typeof item.snapshotAction === 'string' ? item.snapshotAction : undefined,
+      cloudSyncStatus,
+      cloudSyncNote:
+        typeof item.cloudSyncNote === 'string' ? item.cloudSyncNote : undefined,
+      uploadedBy:
+        typeof item.uploadedBy === 'string' && item.uploadedBy
+          ? item.uploadedBy
+          : 'Admin',
+    });
+  }
+  return result.slice(0, 200);
+}
+
 function readJsonStorageSafe(key: string): { found: boolean; value: unknown } {
   try {
     const raw = localStorage.getItem(key);
@@ -907,6 +997,11 @@ export default function App() {
       : [];
   });
 
+  const [uploadHistory, setUploadHistory] = useState<FileUploadHistoryEntry[]>(() => {
+    const { found, value } = readJsonStorageSafe(STORAGE_KEYS.UPLOAD_HISTORY);
+    return found ? sanitizeUploadHistoryList(value) : [];
+  });
+
   const [notifPrefs, setNotifPrefs] = useState<NotificationPreferences>(() =>
     readObjectStorage<NotificationPreferences>(STORAGE_KEYS.NOTIF_PREFS, {
       enabled: true,
@@ -915,11 +1010,20 @@ export default function App() {
     }),
   );
 
+  const [weeklyBackupSchedule, setWeeklyBackupSchedule] =
+    useState<WeeklyBackupSchedule>(() =>
+      readObjectStorage<WeeklyBackupSchedule>(
+        STORAGE_KEYS.WEEKLY_BACKUP,
+        DEFAULT_WEEKLY_BACKUP_SCHEDULE,
+      ),
+    );
+  const [weeklyBackupPromptOpen, setWeeklyBackupPromptOpen] = useState(false);
+
   const [activeNav, setActiveNav] = useState<NavSection>('overview');
   const [toolsSubTab, setToolsSubTab] = useState<
     'office_breakdown' | 'bm_analytics'
   >('office_breakdown');
-  const [settingsSubTab, setSettingsSubTab] = useState<'lookup' | 'backup'>('lookup');
+  const [settingsSubTab, setSettingsSubTab] = useState<'lookup' | 'history' | 'backup'>('lookup');
   const [mrpMap, setMrpMap] = useState<Map<string, MrpEnrichment>>(() => {
     const { found, value } = readJsonStorageSafe(STORAGE_KEYS.MRP_MAP);
     return found
@@ -930,6 +1034,8 @@ export default function App() {
   const [selectedOfficer, setSelectedOfficer] = useState<string>('ALL');
   const [animKey, setAnimKey] = useState(0);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [lastCloudSyncAt, setLastCloudSyncAt] = useState<string | null>(null);
+  const lastCloudUpdatedAtRef = useRef<string | null>(null);
 
   const [adminToken, setAdminToken] = useState<string | null>(null);
   const [adminModalOpen, setAdminModalOpen] = useState(false);
@@ -962,11 +1068,39 @@ export default function App() {
   );
 
   const syncFromLiveCloud = useCallback(
-    async (silent = true) => {
-      setIsSyncingCloud(true);
+    async (
+      silent = true,
+      options?: { background?: boolean; onlyIfNewer?: boolean },
+    ) => {
+      if (!options?.background) {
+        setIsSyncingCloud(true);
+      }
       try {
-        const cloud = await fetchLiveCloudData();
+        const cloud = await fetchLiveCloudData({
+          background: options?.background,
+        });
+        const checkedSys = captureSystemActiveDateTime();
+        setLastCloudSyncAt(checkedSys.displayLabel);
+
         if (isPlainObject(cloud)) {
+          const incomingUpdatedAt =
+            typeof cloud.updatedAt === 'string' ? cloud.updatedAt : '';
+
+          // Skip redundant re-renders during background auto-polling if no new Admin upload occurred
+          if (
+            options?.onlyIfNewer &&
+            incomingUpdatedAt &&
+            lastCloudUpdatedAtRef.current &&
+            incomingUpdatedAt === lastCloudUpdatedAtRef.current
+          ) {
+            return;
+          }
+
+          const wasAlreadySynced = Boolean(lastCloudUpdatedAtRef.current);
+          if (incomingUpdatedAt) {
+            lastCloudUpdatedAtRef.current = incomingUpdatedAt;
+          }
+
           let totalDropped = 0;
 
           const aersReport = sanitizeAersListWithReport(
@@ -1016,8 +1150,13 @@ export default function App() {
             totalDropped += staffReport.droppedCount;
           }
 
+          if (cloud.uploadHistory !== undefined) {
+            setUploadHistory(sanitizeUploadHistoryList(cloud.uploadHistory));
+          }
+
           setAnimKey((k) => k + 1);
-          if (!silent || totalDropped > 0) {
+          const isLiveBackgroundPush = Boolean(options?.background && wasAlreadySynced);
+          if (!silent || isLiveBackgroundPush || totalDropped > 0) {
             const droppedNote =
               totalDropped > 0
                 ? ` · ${totalDropped} malformed record${totalDropped === 1 ? '' : 's'} skipped (see console)`
@@ -1025,10 +1164,13 @@ export default function App() {
             const metaPrinted = isPlainObject(cloud.aersMeta)
               ? String(cloud.aersMeta.printedDateTime || '')
               : '';
-            const updatedAt = typeof cloud.updatedAt === 'string' ? cloud.updatedAt : '';
             showToast(
-              totalDropped > 0 ? 'Live Data Loaded with Warnings' : 'Live Data Refreshed',
-              `Loaded ${aersReport.data.length.toLocaleString()} accounts (${metaPrinted || updatedAt || 'Latest'})${droppedNote}.`,
+              isLiveBackgroundPush
+                ? 'Live Update Received Automatically'
+                : totalDropped > 0
+                  ? 'Live Data Loaded with Warnings'
+                  : 'Live Data Refreshed',
+              `Loaded ${aersReport.data.length.toLocaleString()} accounts (${metaPrinted || incomingUpdatedAt || 'Latest'})${droppedNote}.`,
               totalDropped > 0 ? 'info' : 'success',
             );
           }
@@ -1060,14 +1202,50 @@ export default function App() {
           );
         }
       } finally {
-        setIsSyncingCloud(false);
+        if (!options?.background) {
+          setIsSyncingCloud(false);
+        }
       }
     },
     [showToast],
   );
 
+  // Initial load + Automatic live polling (every 60s, on window focus, online reconnect, and cross-tab/PWA updates)
   useEffect(() => {
     syncFromLiveCloud(true);
+
+    const pollInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+      syncFromLiveCloud(true, { background: true, onlyIfNewer: true });
+    }, 60_000);
+
+    const handleFocusOrOnline = () => {
+      syncFromLiveCloud(true, { background: true, onlyIfNewer: true });
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        syncFromLiveCloud(true, { background: true, onlyIfNewer: true });
+      }
+    };
+
+    window.addEventListener('focus', handleFocusOrOnline);
+    window.addEventListener('online', handleFocusOrOnline);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    const unsubscribeTabs = subscribeLocalTabUpdates(() => {
+      syncFromLiveCloud(true, { background: true, onlyIfNewer: true });
+    });
+
+    return () => {
+      clearInterval(pollInterval);
+      window.removeEventListener('focus', handleFocusOrOnline);
+      window.removeEventListener('online', handleFocusOrOnline);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      unsubscribeTabs();
+    };
   }, [syncFromLiveCloud]);
 
   const pushToLiveCloudIfConfigured = async (override?: {
@@ -1077,12 +1255,14 @@ export default function App() {
     openingBaseline?: OpeningOfficerBaseline | null;
     monthlySnapshots?: MonthlySnapshot[];
     staffAssignments?: StaffAssignedContract[];
+    uploadHistory?: FileUploadHistoryEntry[];
   }) => {
-    const ghToken = getSavedGithubToken();
+    const ghToken = await hydratePermanentGithubToken();
     if (!ghToken) return false;
 
+    const activeSys = captureSystemActiveDateTime();
     const payload = {
-      updatedAt: new Date().toISOString(),
+      updatedAt: activeSys.isoTimestamp,
       updatedBy: 'Admin',
       aersRecords: override?.aersRecords ?? aersRecords,
       aersMeta: override?.aersMeta !== undefined ? override.aersMeta : aersMeta,
@@ -1094,9 +1274,12 @@ export default function App() {
       trackedContracts: [],
       monthlySnapshots: override?.monthlySnapshots ?? monthlySnapshots,
       staffAssignments: override?.staffAssignments ?? staffAssignments,
+      uploadHistory: override?.uploadHistory ?? uploadHistory,
     };
 
     await publishLiveCloudData(payload, ghToken);
+    lastCloudUpdatedAtRef.current = payload.updatedAt;
+    setLastCloudSyncAt(activeSys.displayLabel);
     return true;
   };
 
@@ -1188,6 +1371,17 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem(
+        STORAGE_KEYS.UPLOAD_HISTORY,
+        JSON.stringify(uploadHistory),
+      );
+    } catch {
+      // Ignore
+    }
+  }, [uploadHistory]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
         STORAGE_KEYS.NOTIF_PREFS,
         JSON.stringify(notifPrefs),
       );
@@ -1195,6 +1389,39 @@ export default function App() {
       // Ignore
     }
   }, [notifPrefs]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORAGE_KEYS.WEEKLY_BACKUP,
+        JSON.stringify(weeklyBackupSchedule),
+      );
+    } catch {
+      // Ignore
+    }
+  }, [weeklyBackupSchedule]);
+
+  // Recurring weekly automated JSON backup check — prompts Admin when scheduled weekly slot is due
+  useEffect(() => {
+    if (!isAdmin || !weeklyBackupSchedule.enabled) return;
+
+    const checkWeeklyDue = () => {
+      if (adminModalOpen || weeklyBackupPromptOpen) return;
+      const status = evaluateWeeklyBackupSchedule(weeklyBackupSchedule);
+      if (status.isDueNow) {
+        setWeeklyBackupPromptOpen(true);
+      }
+    };
+
+    checkWeeklyDue();
+    const timer = setInterval(checkWeeklyDue, 30_000);
+    window.addEventListener('focus', checkWeeklyDue);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', checkWeeklyDue);
+    };
+  }, [isAdmin, weeklyBackupSchedule, adminModalOpen, weeklyBackupPromptOpen]);
 
   const visibleAersRecords = useMemo(() => {
     const safeAers = Array.isArray(aersRecords) ? aersRecords : [];
@@ -1450,7 +1677,10 @@ export default function App() {
     }
   };
 
-  const applyParsedAersResult = async (parsed: ParsedAersResult) => {
+  const applyParsedAersResult = async (
+    parsed: ParsedAersResult,
+    fileMeta?: { size?: number },
+  ) => {
     if (!isAdmin) {
       setAdminModalOpen(true);
       showToast(
@@ -1461,14 +1691,25 @@ export default function App() {
       return;
     }
 
+    // Always capture exact active system date & time at upload moment
+    const activeSys = captureSystemActiveDateTime();
+    const stampedMeta: AersMetadata = {
+      ...parsed.metadata,
+      printedDateTime: activeSys.systemDateTime,
+      uploadedAt: activeSys.isoTimestamp,
+      systemDate: activeSys.systemDate,
+      systemTime: activeSys.systemTime,
+      systemTimeZone: activeSys.timeZone,
+    };
+
     const sanitizedAersReport = sanitizeAersListWithReport(
       parsed.records,
-      `upload:${parsed.metadata?.fileName || 'aers'}`,
+      `upload:${stampedMeta.fileName || 'aers'}`,
     );
     const cleanParsedRecords = sanitizedAersReport.data;
 
     const effectiveMrpMap = parsed.mrpMap
-      ? sanitizeMrpMap(parsed.mrpMap, `upload:${parsed.metadata?.fileName || 'aers'}:mrp`)
+      ? sanitizeMrpMap(parsed.mrpMap, `upload:${stampedMeta.fileName || 'aers'}:mrp`)
       : mrpMap;
     if (parsed.mrpMap) {
       setMrpMap(effectiveMrpMap);
@@ -1478,21 +1719,21 @@ export default function App() {
       parsed.excelOfficerOpeningBaseline ??
         buildOpeningOfficerBaseline(
           cleanParsedRecords,
-          parsed.metadata.printedDateTime,
+          stampedMeta.printedDateTime,
         ),
       'upload:openingBaseline',
     );
     setOpeningBaseline(nextBaseline);
 
     setAersRecords(cleanParsedRecords);
-    setAersMeta(parsed.metadata);
+    setAersMeta(stampedMeta);
     setAnimKey((k) => k + 1);
 
     // Daily-keyed snapshot: same-day uploads overwrite today's snapshot with the latest file;
     // a new day locks the previous day's last upload and appends a fresh daily record.
     const dailySnapshot = buildDailyAersSnapshot(
       cleanParsedRecords,
-      parsed.metadata,
+      stampedMeta,
       staffAssignments,
     );
     const existingIdx = monthlySnapshots.findIndex(
@@ -1511,30 +1752,77 @@ export default function App() {
     nextSnapshots.sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
     setMonthlySnapshots(nextSnapshots);
 
-    let cloudNote = ' · Saved locally (Add GitHub Token in Admin to publish live to everyone)';
-    try {
-      const published = await pushToLiveCloudIfConfigured({
-        aersRecords: cleanParsedRecords,
-        aersMeta: parsed.metadata,
-        mrpMap: effectiveMrpMap,
-        openingBaseline: nextBaseline,
-        monthlySnapshots: nextSnapshots,
-      });
-      if (published) {
-        cloudNote = ' · Published LIVE to GitHub for all users!';
-      }
-    } catch (err) {
-      cloudNote = ` · Cloud sync error: ${err instanceof Error ? err.message : 'Failed'}`;
-    }
-
     const snapAction =
       existingIdx >= 0
         ? `Updated ${dailySnapshot.snapshotDate} snapshot`
         : `Locked previous day & created ${dailySnapshot.snapshotDate} snapshot`;
 
+    const hasToken = Boolean((await hydratePermanentGithubToken()).trim());
+    const baseHistoryEntry: FileUploadHistoryEntry = {
+      id: `upl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      fileName: stampedMeta.fileName || 'AERS Workbook',
+      fileType: 'AERS Workbook',
+      fileSizeBytes: fileMeta?.size,
+      uploadedAtIso: activeSys.isoTimestamp,
+      systemDate: activeSys.systemDate,
+      systemTime: activeSys.systemTime,
+      systemDateTimeLabel: activeSys.displayLabel,
+      timeZone: activeSys.timeZone,
+      excelPrintedDateTime: stampedMeta.excelPrintedDateTime,
+      recordsCount: cleanParsedRecords.length,
+      totalPortfolioCount:
+        stampedMeta.bmBranchSnapshot?.totalContracts ??
+        dailySnapshot.totalPortfolioCount ??
+        cleanParsedRecords.length,
+      nplCount:
+        stampedMeta.bmBranchSnapshot?.closingNplCount ??
+        dailySnapshot.closingNplCount,
+      closingNplAmount:
+        stampedMeta.bmBranchSnapshot?.totalClosingNpl ??
+        dailySnapshot.trackedNpl,
+      snapshotAction: snapAction,
+      cloudSyncStatus: hasToken ? 'published_live' : 'local_only',
+      cloudSyncNote: hasToken
+        ? 'Auto-published live to URL & Windows PC Apps'
+        : 'Saved locally — add GitHub Token in Admin to auto-publish live',
+      uploadedBy: 'Admin',
+    };
+
+    const optimisticHistory = [baseHistoryEntry, ...uploadHistory].slice(0, 200);
+    setUploadHistory(optimisticHistory);
+
+    let cloudNote = ' · Saved locally (Add GitHub Token in Admin to auto-publish live to everyone)';
+    try {
+      const published = await pushToLiveCloudIfConfigured({
+        aersRecords: cleanParsedRecords,
+        aersMeta: stampedMeta,
+        mrpMap: effectiveMrpMap,
+        openingBaseline: nextBaseline,
+        monthlySnapshots: nextSnapshots,
+        uploadHistory: optimisticHistory,
+      });
+      if (published) {
+        cloudNote = ' · Auto-Published LIVE to URL & PC Apps!';
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Failed';
+      cloudNote = ` · Cloud sync error: ${errMsg}`;
+      setUploadHistory((prev) =>
+        prev.map((item) =>
+          item.id === baseHistoryEntry.id
+            ? {
+                ...item,
+                cloudSyncStatus: 'sync_failed',
+                cloudSyncNote: `Auto-publish failed: ${errMsg}`,
+              }
+            : item,
+        ),
+      );
+    }
+
     showToast(
-      `AERS Workbook Loaded (${cleanParsedRecords.length.toLocaleString()} accounts)`,
-      `${snapAction}${cloudNote}`,
+      `AERS Loaded (${activeSys.displayLabel})`,
+      `${cleanParsedRecords.length.toLocaleString()} accounts · ${snapAction}${cloudNote}`,
       'success',
     );
   };
@@ -1552,7 +1840,7 @@ export default function App() {
     try {
       const buffer = await file.arrayBuffer();
       const parsed = parseAersWorkbook(buffer, file.name);
-      await applyParsedAersResult(parsed);
+      await applyParsedAersResult(parsed, { size: file.size });
     } catch (err) {
       const msg =
         err instanceof Error
@@ -1691,16 +1979,29 @@ export default function App() {
     );
   };
 
-  const handleExportBackup = () => {
+  const handleExportBackup = (isAutomatedWeekly = false) => {
+    const activeSys = captureSystemActiveDateTime();
+    const slotInfo = evaluateWeeklyBackupSchedule(weeklyBackupSchedule);
+    const updatedSchedule: WeeklyBackupSchedule = {
+      ...weeklyBackupSchedule,
+      lastBackupAtIso: activeSys.isoTimestamp,
+      lastBackupDisplay: activeSys.displayLabel,
+      lastPromptedSlotKey: slotInfo.currentSlotKey,
+      snoozedUntilIso: undefined,
+    };
+    setWeeklyBackupSchedule(updatedSchedule);
+
     const payload: BackupPayload = {
-      version: 3,
-      exportedAt: new Date().toISOString(),
+      version: 5,
+      exportedAt: activeSys.isoTimestamp,
       trackedContracts: [],
       monthlySnapshots,
       aersMeta,
       aersMasterList: aersRecords,
       openingBaseline,
       staffAssignments,
+      uploadHistory,
+      weeklyBackupSchedule: updatedSchedule,
       notificationPrefs: notifPrefs,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
@@ -1709,18 +2010,51 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `WG_Pulse_Backup_${getTodayISO()}.json`;
+    a.download = isAutomatedWeekly
+      ? `WG_Pulse_Weekly_Backup_${getTodayISO()}.json`
+      : `WG_Pulse_Backup_${getTodayISO()}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    setWeeklyBackupPromptOpen(false);
     showToast(
-      'Backup Exported',
-      'Downloaded full JSON backup of AERS Master Lookup, Assign User Follow-Ups, and Daily Snapshots.',
+      isAutomatedWeekly ? 'Weekly JSON Backup Saved' : 'Backup Exported',
+      `Downloaded full JSON backup (${activeSys.displayLabel}) including AERS Master Lookup, Upload History, Assign User Follow-Ups, and Daily Snapshots.`,
       'success',
+    );
+  };
+
+  const handleSnoozeWeeklyBackup = () => {
+    const twoHoursLater = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    setWeeklyBackupSchedule((prev) => ({
+      ...prev,
+      snoozedUntilIso: twoHoursLater,
+    }));
+    setWeeklyBackupPromptOpen(false);
+    showToast(
+      'Weekly Backup Snoozed',
+      'We will prompt you again in 2 hours to save your local JSON backup.',
+      'info',
+    );
+  };
+
+  const handleSkipWeeklyBackup = () => {
+    const slotInfo = evaluateWeeklyBackupSchedule(weeklyBackupSchedule);
+    setWeeklyBackupSchedule((prev) => ({
+      ...prev,
+      lastPromptedSlotKey: slotInfo.currentSlotKey,
+      snoozedUntilIso: undefined,
+    }));
+    setWeeklyBackupPromptOpen(false);
+    showToast(
+      'Weekly Backup Skipped',
+      `Skipped this week's backup. Next automated prompt: ${slotInfo.nextScheduledLabel}.`,
+      'info',
     );
   };
 
   const handleRestoreBackup = async (file: File) => {
     try {
+      const activeSys = captureSystemActiveDateTime();
       const text = await file.text();
       const parsed = JSON.parse(text) as Partial<BackupPayload>;
       if (!isPlainObject(parsed)) {
@@ -1732,13 +2066,20 @@ export default function App() {
       let totalDropped = 0;
       let restoredSnapCount = 0;
       let restoredAersCount = 0;
+      let nextSnapshots = monthlySnapshots;
+      let nextAers = aersRecords;
+      let nextMeta = aersMeta;
+      let nextBaseline = openingBaseline;
+      let nextStaff = staffAssignments;
+      let baseHistory = uploadHistory;
 
       if (parsed.monthlySnapshots !== undefined) {
         const snapReport = sanitizeSnapshotsListWithReport(
           parsed.monthlySnapshots,
           `backup:${file.name}:monthlySnapshots`,
         );
-        setMonthlySnapshots(snapReport.data);
+        nextSnapshots = snapReport.data;
+        setMonthlySnapshots(nextSnapshots);
         restoredSnapCount = snapReport.data.length;
         totalDropped += snapReport.droppedCount;
       }
@@ -1748,26 +2089,25 @@ export default function App() {
           parsed.aersMasterList,
           `backup:${file.name}:aersMasterList`,
         );
-        setAersRecords(aersReport.data);
+        nextAers = aersReport.data;
+        setAersRecords(nextAers);
         restoredAersCount = aersReport.data.length;
         totalDropped += aersReport.droppedCount;
       }
 
       if (parsed.aersMeta !== undefined) {
-        setAersMeta(
-          isPlainObject(parsed.aersMeta)
-            ? (parsed.aersMeta as unknown as AersMetadata)
-            : null,
-        );
+        nextMeta = isPlainObject(parsed.aersMeta)
+          ? (parsed.aersMeta as unknown as AersMetadata)
+          : null;
+        setAersMeta(nextMeta);
       }
 
       if (parsed.openingBaseline !== undefined) {
-        setOpeningBaseline(
-          sanitizeOpeningBaseline(
-            parsed.openingBaseline,
-            `backup:${file.name}:openingBaseline`,
-          ),
+        nextBaseline = sanitizeOpeningBaseline(
+          parsed.openingBaseline,
+          `backup:${file.name}:openingBaseline`,
         );
+        setOpeningBaseline(nextBaseline);
       }
 
       if (parsed.staffAssignments !== undefined) {
@@ -1775,8 +2115,13 @@ export default function App() {
           parsed.staffAssignments,
           `backup:${file.name}:staffAssignments`,
         );
-        setStaffAssignments(staffReport.data);
+        nextStaff = staffReport.data;
+        setStaffAssignments(nextStaff);
         totalDropped += staffReport.droppedCount;
+      }
+
+      if (parsed.uploadHistory !== undefined) {
+        baseHistory = sanitizeUploadHistoryList(parsed.uploadHistory);
       }
 
       if (isPlainObject(parsed.notificationPrefs)) {
@@ -1791,13 +2136,77 @@ export default function App() {
         });
       }
 
+      if (isPlainObject(parsed.weeklyBackupSchedule)) {
+        setWeeklyBackupSchedule({
+          ...DEFAULT_WEEKLY_BACKUP_SCHEDULE,
+          ...(parsed.weeklyBackupSchedule as unknown as Partial<WeeklyBackupSchedule>),
+        });
+      }
+
+      const canPublish =
+        isAdmin && Boolean((await hydratePermanentGithubToken()).trim());
+      const restoreEntry: FileUploadHistoryEntry = {
+        id: `upl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        fileName: file.name,
+        fileType: 'JSON Backup Restore',
+        fileSizeBytes: file.size,
+        uploadedAtIso: activeSys.isoTimestamp,
+        systemDate: activeSys.systemDate,
+        systemTime: activeSys.systemTime,
+        systemDateTimeLabel: activeSys.displayLabel,
+        timeZone: activeSys.timeZone,
+        recordsCount: restoredAersCount,
+        totalPortfolioCount:
+          nextMeta?.bmBranchSnapshot?.totalContracts ?? restoredAersCount,
+        snapshotAction: `Restored ${restoredSnapCount} snapshots`,
+        cloudSyncStatus: canPublish ? 'published_live' : 'local_only',
+        cloudSyncNote: canPublish
+          ? 'Auto-published restored backup live to URL & PC Apps'
+          : 'Restored locally (unlock Admin + GitHub Token to publish live)',
+        uploadedBy: isAdmin ? 'Admin' : 'Local User',
+      };
+
+      const nextHistory = [restoreEntry, ...baseHistory].slice(0, 200);
+      setUploadHistory(nextHistory);
+
+      let cloudNote = '';
+      if (isAdmin) {
+        try {
+          const published = await pushToLiveCloudIfConfigured({
+            aersRecords: nextAers,
+            aersMeta: nextMeta,
+            openingBaseline: nextBaseline,
+            monthlySnapshots: nextSnapshots,
+            staffAssignments: nextStaff,
+            uploadHistory: nextHistory,
+          });
+          if (published) {
+            cloudNote = ' · Auto-Published LIVE!';
+          }
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : 'Failed';
+          cloudNote = ` · Cloud sync error: ${errMsg}`;
+          setUploadHistory((prev) =>
+            prev.map((item) =>
+              item.id === restoreEntry.id
+                ? {
+                    ...item,
+                    cloudSyncStatus: 'sync_failed',
+                    cloudSyncNote: `Auto-publish failed: ${errMsg}`,
+                  }
+                : item,
+            ),
+          );
+        }
+      }
+
       const droppedNote =
         totalDropped > 0
           ? ` (${totalDropped} malformed record${totalDropped === 1 ? '' : 's'} skipped — see console)`
           : '';
       showToast(
         totalDropped > 0 ? 'Backup Restored with Warnings' : 'Backup Restored',
-        `Restored ${restoredAersCount.toLocaleString()} AERS accounts and ${restoredSnapCount} daily snapshots${droppedNote}.`,
+        `Restored ${restoredAersCount.toLocaleString()} AERS accounts and ${restoredSnapCount} daily snapshots (${activeSys.displayLabel})${droppedNote}${cloudNote}.`,
         totalDropped > 0 ? 'info' : 'success',
       );
     } catch (err) {
@@ -1809,14 +2218,52 @@ export default function App() {
   };
 
   const handleForcePublishNow = async () => {
-    const ok = await pushToLiveCloudIfConfigured();
+    const activeSys = captureSystemActiveDateTime();
+    const publishEntry: FileUploadHistoryEntry = {
+      id: `upl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      fileName: aersMeta?.fileName || 'Current Portfolio Snapshot',
+      fileType: 'Manual Live Publish',
+      uploadedAtIso: activeSys.isoTimestamp,
+      systemDate: activeSys.systemDate,
+      systemTime: activeSys.systemTime,
+      systemDateTimeLabel: activeSys.displayLabel,
+      timeZone: activeSys.timeZone,
+      excelPrintedDateTime: aersMeta?.excelPrintedDateTime,
+      recordsCount: aersRecords.length,
+      totalPortfolioCount:
+        aersMeta?.bmBranchSnapshot?.totalContracts ?? aersRecords.length,
+      nplCount: aersMeta?.bmBranchSnapshot?.closingNplCount,
+      closingNplAmount: aersMeta?.bmBranchSnapshot?.totalClosingNpl,
+      snapshotAction: 'Manual live broadcast to all users',
+      cloudSyncStatus: 'published_live',
+      cloudSyncNote: 'Published live to Web URL & installed Windows PC Apps',
+      uploadedBy: 'Admin',
+    };
+
+    const nextHistory = [publishEntry, ...uploadHistory].slice(0, 200);
+    const ok = await pushToLiveCloudIfConfigured({
+      uploadHistory: nextHistory,
+    });
     if (!ok) {
       throw new Error('Please paste and save your GitHub Personal Access Token first.');
     }
+    setUploadHistory(nextHistory);
     showToast(
-      'Published Live to Everyone',
+      `Published Live (${activeSys.displayLabel})`,
       `All ${aersRecords.length.toLocaleString()} AERS accounts & ${staffAssignments.length} assigned follow-ups are now live for all users.`,
       'success',
+    );
+  };
+
+  const handleClearUploadHistory = () => {
+    if (!isAdmin) return;
+    setUploadHistory([]);
+    localStorage.removeItem(STORAGE_KEYS.UPLOAD_HISTORY);
+    pushToLiveCloudIfConfigured({ uploadHistory: [] }).catch(() => {});
+    showToast(
+      'Upload History Cleared',
+      'Cleared recorded file upload history log.',
+      'info',
     );
   };
 
@@ -1830,6 +2277,7 @@ export default function App() {
     setOpeningBaseline(null);
     setMonthlySnapshots([]);
     setStaffAssignments([]);
+    setUploadHistory([]);
     setSelectedOfficer('ALL');
     localStorage.removeItem(STORAGE_KEYS.AERS_MASTER);
     localStorage.removeItem(STORAGE_KEYS.AERS_META);
@@ -1838,6 +2286,7 @@ export default function App() {
     localStorage.removeItem(STORAGE_KEYS.TRACKED);
     localStorage.removeItem(STORAGE_KEYS.SNAPSHOTS);
     localStorage.removeItem(STORAGE_KEYS.STAFF_ASSIGNMENTS);
+    localStorage.removeItem(STORAGE_KEYS.UPLOAD_HISTORY);
 
     await pushToLiveCloudIfConfigured({
       aersRecords: [],
@@ -1846,6 +2295,7 @@ export default function App() {
       openingBaseline: null,
       monthlySnapshots: [],
       staffAssignments: [],
+      uploadHistory: [],
     }).catch(() => {});
 
     showToast(
@@ -2681,6 +3131,20 @@ export default function App() {
                   <button
                     type="button"
                     role="tab"
+                    aria-selected={settingsSubTab === 'history'}
+                    onClick={() => setSettingsSubTab('history')}
+                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                      settingsSubTab === 'history'
+                        ? 'bg-red-700 text-white'
+                        : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800'
+                    }`}
+                  >
+                    <History className="w-3.5 h-3.5" />
+                    Upload History &amp; Live Sync ({uploadHistory.length})
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
                     aria-selected={settingsSubTab === 'backup'}
                     onClick={() => setSettingsSubTab('backup')}
                     className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
@@ -2704,15 +3168,35 @@ export default function App() {
                     onUploadAersFile={handleUploadAersFile}
                   />
                 </SectionSafeBoundary>
+              ) : settingsSubTab === 'history' ? (
+                <SectionSafeBoundary name="Upload History & Live Sync" resetKey={animKey}>
+                  <UploadHistoryPanel
+                    uploadHistory={uploadHistory}
+                    aersMeta={aersMeta}
+                    isAdmin={isAdmin}
+                    isSyncingCloud={isSyncingCloud}
+                    lastCloudSyncAt={lastCloudSyncAt}
+                    onSyncLiveNow={() => syncFromLiveCloud(false)}
+                    onForcePublishNow={handleForcePublishNow}
+                    onOpenAdminModal={() => setAdminModalOpen(true)}
+                    onClearHistory={handleClearUploadHistory}
+                  />
+                </SectionSafeBoundary>
               ) : (
                 <SectionSafeBoundary name="Backup & Settings" resetKey={animKey}>
                   <BackupSettingsPanel
                     staffAssignmentsCount={staffAssignments.length}
                     snapshotsCount={monthlySnapshots.length}
+                    uploadHistoryCount={uploadHistory.length}
                     aersMeta={aersMeta}
                     isAdminAuthenticated={isAdmin}
+                    weeklySchedule={weeklyBackupSchedule}
+                    onUpdateWeeklySchedule={setWeeklyBackupSchedule}
+                    onTriggerWeeklyBackupPromptNow={() =>
+                      setWeeklyBackupPromptOpen(true)
+                    }
                     onOpenAdminModal={() => setAdminModalOpen(true)}
-                    onExportBackup={handleExportBackup}
+                    onExportBackup={() => handleExportBackup(false)}
                     onRestoreBackup={handleRestoreBackup}
                   />
                 </SectionSafeBoundary>
@@ -2902,6 +3386,19 @@ export default function App() {
 
       {/* Offline Connectivity Indicator */}
       <OfflineIndicator />
+
+      {/* Weekly Automated JSON Backup Prompt Modal */}
+      <WeeklyBackupPromptModal
+        isOpen={weeklyBackupPromptOpen}
+        schedule={weeklyBackupSchedule}
+        aersCount={aersRecords.length}
+        snapshotsCount={monthlySnapshots.length}
+        staffAssignmentsCount={staffAssignments.length}
+        uploadHistoryCount={uploadHistory.length}
+        onConfirmDownload={() => handleExportBackup(true)}
+        onSnoozeTwoHours={handleSnoozeWeeklyBackup}
+        onSkipThisWeek={handleSkipWeeklyBackup}
+      />
 
       {/* Admin Modal */}
       <AdminLoginModal
