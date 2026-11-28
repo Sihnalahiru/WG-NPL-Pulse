@@ -3269,7 +3269,7 @@ export function computeDpdAgeBuckets(
 }
 
 export function isEvaluableBorderlineAccount(item: EvaluableAccount): boolean {
-  if (item.actualDpd >= 91 || item.npl > 0) return false;
+  if (item.actualDpd >= 91 || item.npl > 0 || (item.opNpl || 0) > 0) return false;
   const nextMonthProjectedDpd = item.actualDpd + 30;
   return (
     item.monthEndForecastDpd >= 91 ||

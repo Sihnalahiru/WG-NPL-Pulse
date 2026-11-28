@@ -273,8 +273,16 @@ export function StaffFollowUpMonitorPanel({
       const totalCollection = Number(aers?.totalCollection ?? 0) || 0;
       const lastPaidAmount = Number(aers?.lastPaidAmount ?? 0) || 0;
       const lastPayDate = aers?.lastPayDate || '';
+      const hasRecentPayDate = Boolean(
+        lastPayDate &&
+        (lastPayDate.includes('Nov') ||
+         lastPayDate.startsWith('2026-11') ||
+         lastPayDate.includes('2026') ||
+         lastPayDate.includes('Oct') ||
+         lastPayDate.startsWith('2026-10')),
+      );
 
-      const isPaid = totalCollection > 0;
+      const isPaid = totalCollection > 0 || lastPaidAmount > 0 || hasRecentPayDate;
       const pendingDue = Math.max(0, currentMonthDue - totalCollection);
       const collectionPct =
         currentMonthDue > 0

@@ -514,7 +514,17 @@ export function ExecutiveOfficerHubPanel({
       const currentMonthDue =
         Number(aers?.currentMonthDue || aers?.dueBudgetMonth || assignment.assignedDue) || 0;
       const totalCollection = Number(aers?.totalCollection ?? 0) || 0;
-      const isPaid = totalCollection > 0;
+      const lastPaidAmount = Number(aers?.lastPaidAmount ?? 0) || 0;
+      const lastPayDate = asStr(aers?.lastPayDate);
+      const hasRecentPayDate = Boolean(
+        lastPayDate &&
+        (lastPayDate.includes('Nov') ||
+         lastPayDate.startsWith('2026-11') ||
+         lastPayDate.includes('2026') ||
+         lastPayDate.includes('Oct') ||
+         lastPayDate.startsWith('2026-10')),
+      );
+      const isPaid = totalCollection > 0 || lastPaidAmount > 0 || hasRecentPayDate;
       const pendingDue = Math.max(0, currentMonthDue - totalCollection);
       const opAge = Number(aers?.opAge ?? assignment.assignedOpAge) || 0;
       const closingAge = Number(aers?.currentAge ?? assignment.assignedOpAge) || 0;

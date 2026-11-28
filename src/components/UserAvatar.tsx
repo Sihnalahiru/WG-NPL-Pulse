@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 
 interface UserAvatarProps {
   name: string;
@@ -11,11 +11,21 @@ export function UserAvatar({ name, sizeClass = 'w-8 h-8 text-xs' }: UserAvatarPr
     .replace(/^(ro|mo)\s*:\s*/i, '')
     .trim();
 
-  const extensions = ['jpg', 'png', 'jpeg', 'webp'];
+  const extensions = ['png', 'jpg', 'jpeg', 'webp'];
+  const variants = useMemo(() => {
+    if (!cleanName) return [];
+    const lower = cleanName.toLowerCase();
+    const noSpaceLower = lower.replace(/\s+/g, '');
+    const alphabetic = lower.replace(/[^a-z]/g, '');
+    return Array.from(new Set([cleanName, lower, noSpaceLower, alphabetic]));
+  }, [cleanName]);
+
+  const [variantIndex, setVariantIndex] = useState(0);
   const [extIndex, setExtIndex] = useState(0);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
+    setVariantIndex(0);
     setExtIndex(0);
     setFailed(false);
   }, [cleanName]);
@@ -39,7 +49,8 @@ export function UserAvatar({ name, sizeClass = 'w-8 h-8 text-xs' }: UserAvatarPr
     );
   }
 
-  const src = `./images/user/${encodeURIComponent(cleanName)}.${extensions[extIndex]}`;
+  const currentVariant = variants[variantIndex] || cleanName;
+  const src = `./images/user/${encodeURIComponent(currentVariant)}.${extensions[extIndex]}`;
 
   return (
     <img
@@ -50,6 +61,9 @@ export function UserAvatar({ name, sizeClass = 'w-8 h-8 text-xs' }: UserAvatarPr
       onError={() => {
         if (extIndex + 1 < extensions.length) {
           setExtIndex((prev) => prev + 1);
+        } else if (variantIndex + 1 < variants.length) {
+          setVariantIndex((prev) => prev + 1);
+          setExtIndex(0);
         } else {
           setFailed(true);
         }
@@ -57,3 +71,4 @@ export function UserAvatar({ name, sizeClass = 'w-8 h-8 text-xs' }: UserAvatarPr
     />
   );
 }
+
