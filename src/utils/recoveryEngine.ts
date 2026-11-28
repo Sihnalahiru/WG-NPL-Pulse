@@ -5,6 +5,10 @@ import type {
   AgeBucketDatum,
   AgeGroupEffortRow,
   BelowOneQuickWinItem,
+  BelowThreeCollectionSnapshot,
+  BelowThreeContractItem,
+  BelowThreeOfficerRow,
+  BelowThreeSubBucket,
   BmAgeBucketDatum,
   BmOfficerPerformanceRow,
   BorderlineAccountItem,
@@ -914,6 +918,7 @@ function applyStrictNplUniverseFilter(
     moPerformance: computeBmOfficerPerformance(allRecords, [], 'MO'),
     ageGroupEfforts: computeAgeGroupEfforts(allRecords),
     belowOneQuickWins: extractBelowOneQuickWins(allRecords),
+    belowThreeSummary: computeBelowThreeCollectionSnapshot(allRecords, 650),
     totalContracts,
     belowOneCount,
     ratio90Pct,
@@ -2830,6 +2835,310 @@ export function extractBelowOneQuickWins(
         a.currentAge - b.currentAge ||
         a.closingDebtor - b.closingDebtor,
     );
+}
+
+export function computeBelowThreeCollectionSnapshot(
+  records: AersRecord[],
+  maxStoredContracts = 1500,
+): BelowThreeCollectionSnapshot {
+  const below3 = records.filter((r) => (Number(r.currentAge) || 0) < 3.0);
+
+  const subBuckets: BelowThreeSubBucket[] = [
+    {
+      key: 'zero_below',
+      label: 'Age ≤ 0.00 (Advance / Zero)',
+      shortLabel: '≤ 0.00',
+      totalCount: 0,
+      paidCount: 0,
+      notPaidCount: 0,
+      paidPct: 0,
+      dueAmount: 0,
+      collectedAmount: 0,
+      varianceAmount: 0,
+      collectionPct: 0,
+    },
+    {
+      key: 'age_0_1',
+      label: 'Age 0.01 – 1.00 (Current)',
+      shortLabel: '0.01 – 1.00',
+      totalCount: 0,
+      paidCount: 0,
+      notPaidCount: 0,
+      paidPct: 0,
+      dueAmount: 0,
+      collectedAmount: 0,
+      varianceAmount: 0,
+      collectionPct: 0,
+    },
+    {
+      key: 'age_1_2',
+      label: 'Age 1.01 – 1.99 (1–2 Arrears)',
+      shortLabel: '1.01 – 1.99',
+      totalCount: 0,
+      paidCount: 0,
+      notPaidCount: 0,
+      paidPct: 0,
+      dueAmount: 0,
+      collectedAmount: 0,
+      varianceAmount: 0,
+      collectionPct: 0,
+    },
+    {
+      key: 'age_2_3',
+      label: 'Age 2.00 – 2.99 (Borderline Pre-NPL)',
+      shortLabel: '2.00 – 2.99',
+      totalCount: 0,
+      paidCount: 0,
+      notPaidCount: 0,
+      paidPct: 0,
+      dueAmount: 0,
+      collectedAmount: 0,
+      varianceAmount: 0,
+      collectionPct: 0,
+    },
+  ];
+
+  interface OfficerAcc {
+    officer: string;
+    role: string;
+    totalCount: number;
+    paidCount: number;
+    notPaidCount: number;
+    partialPaidCount: number;
+    unpaidWithDueCount: number;
+    unpaidDueSum: number;
+    dueAmount: number;
+    collectedAmount: number;
+    subBuckets: {
+      below1: { total: number; paid: number; notPaid: number };
+      age1to2: { total: number; paid: number; notPaid: number };
+      age2to3: { total: number; paid: number; notPaid: number };
+    };
+  }
+
+  const officerMap = new Map<string, OfficerAcc>();
+  const allContractItems: BelowThreeContractItem[] = [];
+
+  let totalPaid = 0;
+  let totalNotPaid = 0;
+  let totalPartialPaid = 0;
+  let totalUnpaidWithDue = 0;
+  let totalUnpaidDueSum = 0;
+  let totalDue = 0;
+  let totalCollected = 0;
+
+  for (const r of below3) {
+    const currentAge = Number(r.currentAge) || 0;
+    const opAge = Number(r.opAge) || 0;
+    const due = Math.max(0, Number(r.currentMonthDue || r.dueBudgetMonth) || 0);
+    const coll = Math.max(0, Number(r.totalCollection) || 0);
+    const isPaid = coll > 0;
+    const isFullPaid = due > 0 ? coll >= due : isPaid;
+    const isPartial = isPaid && due > 0 && coll < due;
+    const variance = coll - due;
+
+    totalDue += due;
+    totalCollected += coll;
+
+    if (isPaid) {
+      totalPaid += 1;
+      if (isPartial) totalPartialPaid += 1;
+    } else {
+      totalNotPaid += 1;
+      if (due > 0) {
+        totalUnpaidWithDue += 1;
+        totalUnpaidDueSum += due;
+      }
+    }
+
+    const bucket =
+      currentAge <= 0
+        ? subBuckets[0]
+        : currentAge <= 1.0
+          ? subBuckets[1]
+          : currentAge < 2.0
+            ? subBuckets[2]
+            : subBuckets[3];
+
+    bucket.totalCount += 1;
+    if (isPaid) bucket.paidCount += 1;
+    else bucket.notPaidCount += 1;
+    bucket.dueAmount += due;
+    bucket.collectedAmount += coll;
+
+    const officer = getOfficerByOfficeType(r);
+    const officeType = (r.officeType || '').trim().toUpperCase();
+    const role = officeType.includes('MO') ? 'MO' : officeType.includes('RO') ? 'RO' : officeType || 'RO';
+
+    const off =
+      officerMap.get(officer) ?? {
+        officer,
+        role,
+        totalCount: 0,
+        paidCount: 0,
+        notPaidCount: 0,
+        partialPaidCount: 0,
+        unpaidWithDueCount: 0,
+        unpaidDueSum: 0,
+        dueAmount: 0,
+        collectedAmount: 0,
+        subBuckets: {
+          below1: { total: 0, paid: 0, notPaid: 0 },
+          age1to2: { total: 0, paid: 0, notPaid: 0 },
+          age2to3: { total: 0, paid: 0, notPaid: 0 },
+        },
+      };
+
+    off.totalCount += 1;
+    off.dueAmount += due;
+    off.collectedAmount += coll;
+    if (isPaid) {
+      off.paidCount += 1;
+      if (isPartial) off.partialPaidCount += 1;
+    } else {
+      off.notPaidCount += 1;
+      if (due > 0) {
+        off.unpaidWithDueCount += 1;
+        off.unpaidDueSum += due;
+      }
+    }
+
+    const offSub =
+      currentAge <= 1.0
+        ? off.subBuckets.below1
+        : currentAge < 2.0
+          ? off.subBuckets.age1to2
+          : off.subBuckets.age2to3;
+    offSub.total += 1;
+    if (isPaid) offSub.paid += 1;
+    else offSub.notPaid += 1;
+
+    officerMap.set(officer, off);
+
+    allContractItems.push({
+      contractNo: normalizeContractNo(r.contractNo),
+      cusName: r.cusName || 'Unnamed Client',
+      officer,
+      officeType: role,
+      opAge,
+      currentAge,
+      actualDpd: Number(r.actualDpd) || 0,
+      currentMonthDue: due,
+      totalCollection: coll,
+      varianceAmount: variance,
+      isPaid,
+      isFullPaid,
+      lastPayDate: r.lastPayDate || '',
+      lastPaidAmount: Number(r.lastPaidAmount) || 0,
+      closingDebtor: Number(r.closingDebtor) || 0,
+      assignOfficerEfforts: Number(r.assignOfficerEfforts) || 0,
+      totalEfforts: Number(r.totalEfforts) || 0,
+      nextDueDate: r.nextDueDate || '',
+    });
+  }
+
+  for (const b of subBuckets) {
+    b.varianceAmount = Math.round(b.collectedAmount - b.dueAmount);
+    b.paidPct =
+      b.totalCount > 0 ? Math.round((b.paidCount / b.totalCount) * 1000) / 10 : 0;
+    b.collectionPct =
+      b.dueAmount > 0 ? Math.round((b.collectedAmount / b.dueAmount) * 1000) / 10 : 0;
+  }
+
+  const byOfficer: BelowThreeOfficerRow[] = Array.from(officerMap.values())
+    .map((o) => {
+      const variance = o.collectedAmount - o.dueAmount;
+      const shortfall = Math.max(0, -variance);
+      const avgDuePerUnpaid =
+        o.unpaidWithDueCount > 0
+          ? o.unpaidDueSum / o.unpaidWithDueCount
+          : o.totalCount > 0
+            ? o.dueAmount / o.totalCount
+            : 0;
+      const contractsNeededAgainstDue =
+        shortfall <= 0
+          ? 0
+          : avgDuePerUnpaid > 0
+            ? Math.min(
+                o.notPaidCount + o.partialPaidCount,
+                Math.ceil(shortfall / avgDuePerUnpaid),
+              )
+            : o.unpaidWithDueCount;
+
+      return {
+        officer: o.officer,
+        role: o.role,
+        totalCount: o.totalCount,
+        paidCount: o.paidCount,
+        notPaidCount: o.notPaidCount,
+        paidRatioPct:
+          o.totalCount > 0 ? Math.round((o.paidCount / o.totalCount) * 1000) / 10 : 0,
+        partialPaidCount: o.partialPaidCount,
+        unpaidWithDueCount: o.unpaidWithDueCount,
+        contractsNeededAgainstDue,
+        dueAmount: Math.round(o.dueAmount),
+        collectedAmount: Math.round(o.collectedAmount),
+        varianceAmount: Math.round(variance),
+        collectionPct:
+          o.dueAmount > 0 ? Math.round((o.collectedAmount / o.dueAmount) * 1000) / 10 : 0,
+        avgDuePerUnpaid: Math.round(avgDuePerUnpaid),
+        subBuckets: o.subBuckets,
+      };
+    })
+    .sort((a, b) => a.varianceAmount - b.varianceAmount);
+
+  const totalVariance = totalCollected - totalDue;
+  const totalShortfall = Math.max(0, -totalVariance);
+  const avgBranchDue =
+    totalUnpaidWithDue > 0
+      ? totalUnpaidDueSum / totalUnpaidWithDue
+      : below3.length > 0
+        ? totalDue / below3.length
+        : 0;
+  const totalContractsNeeded =
+    totalShortfall <= 0
+      ? 0
+      : avgBranchDue > 0
+        ? Math.min(
+            totalNotPaid + totalPartialPaid,
+            Math.ceil(totalShortfall / avgBranchDue),
+          )
+        : totalUnpaidWithDue;
+
+  // Sort contracts so highest-priority Not Paid (with largest due & closest to 3.0 age) appear first
+  allContractItems.sort((a, b) => {
+    if (a.isPaid !== b.isPaid) return a.isPaid ? 1 : -1;
+    if (!a.isPaid) {
+      return b.currentMonthDue - a.currentMonthDue || b.currentAge - a.currentAge;
+    }
+    if (a.isFullPaid !== b.isFullPaid) return a.isFullPaid ? 1 : -1;
+    return b.currentMonthDue - a.currentMonthDue;
+  });
+
+  // Cap stored contracts in snapshot metadata to stay localStorage-safe while retaining unpaid priority
+  const storedContracts =
+    allContractItems.length > maxStoredContracts
+      ? allContractItems.slice(0, maxStoredContracts)
+      : allContractItems;
+
+  return {
+    totalCount: below3.length,
+    paidCount: totalPaid,
+    notPaidCount: totalNotPaid,
+    paidRatioPct:
+      below3.length > 0 ? Math.round((totalPaid / below3.length) * 1000) / 10 : 0,
+    partialPaidCount: totalPartialPaid,
+    unpaidWithDueCount: totalUnpaidWithDue,
+    contractsNeededAgainstDue: totalContractsNeeded,
+    dueAmount: Math.round(totalDue),
+    collectedAmount: Math.round(totalCollected),
+    varianceAmount: Math.round(totalVariance),
+    collectionPct:
+      totalDue > 0 ? Math.round((totalCollected / totalDue) * 1000) / 10 : 0,
+    subBuckets,
+    byOfficer,
+    contracts: storedContracts,
+  };
 }
 
 export function computeStaffDailySnapshotMap(

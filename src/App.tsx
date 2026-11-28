@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'motion/react';
 import {
   BadgeDollarSign,
+  Banknote,
   BarChart3,
   Bell,
   BellRing,
@@ -35,6 +36,7 @@ import { AlertsNotificationsPanel } from './components/AlertsNotificationsPanel'
 import { AnalyticsCharts } from './components/AnalyticsCharts';
 import { BackupSettingsPanel } from './components/BackupSettingsPanel';
 import { BelowOneRatioPanel } from './components/BelowOneRatioPanel';
+import { BelowThreeCollectionPanel } from './components/BelowThreeCollectionPanel';
 import { BmPortfolioAnalyticsPanel } from './components/BmPortfolioAnalyticsPanel';
 import { ExecutiveOfficerHubPanel } from './components/ExecutiveOfficerHubPanel';
 import { FbIncentivePanel } from './components/FbIncentivePanel';
@@ -1870,6 +1872,12 @@ export default function App() {
       icon: <Scale className="w-4 h-4 shrink-0" />,
     },
     {
+      id: 'below_three',
+      label: t('breadcrumbBelowThree'),
+      shortLabel: t('navBelowThree'),
+      icon: <Banknote className="w-4 h-4 shrink-0" />,
+    },
+    {
       id: 'borderline',
       label: t('breadcrumbBorderline'),
       shortLabel: t('navBorderline'),
@@ -1935,6 +1943,7 @@ export default function App() {
     overview: t('breadcrumbOverview'),
     assign_user: t('breadcrumbAssignUser'),
     below_one: t('breadcrumbBelowOne'),
+    below_three: t('breadcrumbBelowThree'),
     borderline: t('breadcrumbBorderline'),
     worst: t('breadcrumbWorst'),
     alerts: t('breadcrumbAlerts'),
@@ -2380,6 +2389,15 @@ export default function App() {
 
                       <button
                         type="button"
+                        onClick={() => setActiveNav('below_three')}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-white transition-all whitespace-nowrap"
+                      >
+                        <Banknote className="w-3.5 h-3.5 text-emerald-300" />
+                        {t('navBelowThree')}
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => setActiveNav('rewards')}
                         className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/30 text-amber-200 transition-all whitespace-nowrap"
                       >
@@ -2490,6 +2508,17 @@ export default function App() {
                 aersRecords={visibleAersRecords}
                 aersMeta={aersMeta}
                 mrpMap={mrpMap}
+              />
+            </SectionSafeBoundary>
+          )}
+
+          {activeNav === 'below_three' && (
+            <SectionSafeBoundary name="Below 3 Collection & Variance" resetKey={animKey}>
+              <BelowThreeCollectionPanel
+                aersRecords={visibleAersRecords}
+                aersMeta={aersMeta}
+                mrpMap={mrpMap}
+                isDark={isDark}
               />
             </SectionSafeBoundary>
           )}

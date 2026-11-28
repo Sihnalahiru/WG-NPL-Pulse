@@ -21,6 +21,7 @@ export type NavSection =
   | 'overview'
   | 'assign_user'
   | 'below_one'
+  | 'below_three'
   | 'borderline'
   | 'worst'
   | 'alerts'
@@ -102,6 +103,80 @@ export interface BelowOneQuickWinItem {
   lastPaidAmount: number;
 }
 
+export interface BelowThreeSubBucket {
+  key: 'zero_below' | 'age_0_1' | 'age_1_2' | 'age_2_3';
+  label: string;
+  shortLabel: string;
+  totalCount: number;
+  paidCount: number;
+  notPaidCount: number;
+  paidPct: number;
+  dueAmount: number;
+  collectedAmount: number;
+  varianceAmount: number;
+  collectionPct: number;
+}
+
+export interface BelowThreeOfficerRow {
+  officer: string;
+  role: string;
+  totalCount: number;
+  paidCount: number;
+  notPaidCount: number;
+  paidRatioPct: number;
+  partialPaidCount: number;
+  unpaidWithDueCount: number;
+  contractsNeededAgainstDue: number;
+  dueAmount: number;
+  collectedAmount: number;
+  varianceAmount: number;
+  collectionPct: number;
+  avgDuePerUnpaid: number;
+  subBuckets: {
+    below1: { total: number; paid: number; notPaid: number };
+    age1to2: { total: number; paid: number; notPaid: number };
+    age2to3: { total: number; paid: number; notPaid: number };
+  };
+}
+
+export interface BelowThreeContractItem {
+  contractNo: string;
+  cusName: string;
+  officer: string;
+  officeType: string;
+  opAge: number;
+  currentAge: number;
+  actualDpd: number;
+  currentMonthDue: number;
+  totalCollection: number;
+  varianceAmount: number;
+  isPaid: boolean;
+  isFullPaid: boolean;
+  lastPayDate: string;
+  lastPaidAmount: number;
+  closingDebtor: number;
+  assignOfficerEfforts: number;
+  totalEfforts: number;
+  nextDueDate: string;
+}
+
+export interface BelowThreeCollectionSnapshot {
+  totalCount: number;
+  paidCount: number;
+  notPaidCount: number;
+  paidRatioPct: number;
+  partialPaidCount: number;
+  unpaidWithDueCount: number;
+  contractsNeededAgainstDue: number;
+  dueAmount: number;
+  collectedAmount: number;
+  varianceAmount: number;
+  collectionPct: number;
+  subBuckets: BelowThreeSubBucket[];
+  byOfficer: BelowThreeOfficerRow[];
+  contracts: BelowThreeContractItem[];
+}
+
 export interface AersMetadata {
   fileName: string;
   printedDateTime: string;
@@ -115,6 +190,7 @@ export interface AersMetadata {
     moPerformance: BmOfficerPerformanceRow[];
     ageGroupEfforts?: AgeGroupEffortRow[];
     belowOneQuickWins?: BelowOneQuickWinItem[];
+    belowThreeSummary?: BelowThreeCollectionSnapshot;
     totalContracts?: number;
     belowOneCount?: number;
     ratio90Pct?: number;
