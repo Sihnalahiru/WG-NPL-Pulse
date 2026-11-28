@@ -5,9 +5,11 @@ import {
   Bell,
   BellRing,
   Building2,
+  Camera,
   CheckCircle2,
   ClipboardCheck,
   Cloud,
+  Crop,
   Database,
   Flame,
   HardDriveDownload,
@@ -37,8 +39,13 @@ import { PulseLogoMark } from './components/FinanceIllustrations';
 import { KpiStrip } from './components/KpiStrip';
 import { NextMonthBorderlineCardsPanel } from './components/NextMonthBorderlineCardsPanel';
 import { OfficeTypeBreakdownPanel } from './components/OfficeTypeBreakdownPanel';
+import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
 import { StaffFollowUpMonitorPanel } from './components/StaffFollowUpMonitorPanel';
 import { TrendsEvaluationPanel } from './components/TrendsEvaluationPanel';
+import {
+  UniversalSnapshotManager,
+  type SnapshotMode,
+} from './components/UniversalSnapshotManager';
 import { WorstCasePanel } from './components/WorstCasePanel';
 import type {
   AersMetadata,
@@ -909,6 +916,9 @@ export default function App() {
   const [adminToken, setAdminToken] = useState<string | null>(null);
   const [adminModalOpen, setAdminModalOpen] = useState(false);
   const isAdmin = Boolean(adminToken);
+
+  const [snapshotMode, setSnapshotMode] = useState<SnapshotMode>('off');
+  const [hoverSnapEnabled, setHoverSnapEnabled] = useState<boolean>(true);
 
   const [toast, setToast] = useState<ToastBanner | null>(null);
   const [permissionState, setPermissionState] = useState<
@@ -1881,8 +1891,8 @@ export default function App() {
               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 shadow-xs">
                 COMMAND
               </span>
-              <span aria-hidden="true" className="text-slate-300 dark:text-slate-700 hidden 2xl:inline">·</span>
-              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 truncate hidden 2xl:inline">
+              <span aria-hidden="true" className="text-slate-300 dark:text-slate-700 hidden lg:inline">·</span>
+              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 truncate hidden lg:inline">
                 {breadcrumbLabel[activeNav]}
               </span>
             </div>
@@ -1892,80 +1902,56 @@ export default function App() {
           </div>
         </div>
 
-        {/* Center Navigation */}
-        <nav
-          aria-label="Executive Glass Header Navigation"
-          className="hidden xl:flex items-center gap-1 p-1 bg-slate-100/90 dark:bg-slate-950/80 backdrop-blur-2xl border border-slate-200/90 dark:border-slate-800/90 rounded-2xl shadow-xs shrink-0"
-        >
-          {primaryNavItems.map((item) => {
-            const active = activeNav === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setActiveNav(item.id)}
-                className={`relative flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition-all whitespace-nowrap shrink-0 ${
-                  active
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-semibold'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-white/50 dark:hover:bg-slate-900/50'
-                }`}
-              >
-                <span className={active ? 'text-emerald-600 dark:text-emerald-400' : ''}>
-                  {item.icon}
-                </span>
-                <span>{item.shortLabel}</span>
-                {item.badge !== undefined && (
-                  <span
-                    className={`ml-0.5 font-mono text-[9px] font-bold tabular-nums px-1.5 py-0.2 rounded-full ${
-                      active
-                        ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
-                        : 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400 border border-rose-200/50 dark:border-rose-900/50'
-                    }`}
-                  >
-                    {item.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+        {/* Right Zone (Top Main Menu removed — single Bottom Floating Main Menu remains) */}
+        <div className="flex items-center gap-2 shrink-0" data-snapshot-ignore="true">
+          <button
+            type="button"
+            onClick={() =>
+              setSnapshotMode((prev) => (prev === 'pick' ? 'off' : 'pick'))
+            }
+            title="Select any section, card, or chart to Copy PNG / Download PNG / PDF / Excel (Ctrl+Shift+S)"
+            className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
+              snapshotMode === 'pick'
+                ? 'border-emerald-500 bg-emerald-600 text-white'
+                : 'border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Camera
+              className={`w-3.5 h-3.5 shrink-0 ${
+                snapshotMode === 'pick'
+                  ? 'text-white'
+                  : 'text-emerald-600 dark:text-emerald-400'
+              }`}
+            />
+            <span className="hidden md:inline">
+              {snapshotMode === 'pick' ? 'Picking Section…' : 'Snap / Export'}
+            </span>
+          </button>
 
-          <div aria-hidden="true" className="h-4 w-px bg-slate-300 dark:bg-slate-700 mx-0.5" />
+          <button
+            type="button"
+            onClick={() =>
+              setSnapshotMode((prev) => (prev === 'crop' ? 'off' : 'crop'))
+            }
+            title="Drag a custom box anywhere on screen to copy or save a snapshot"
+            className={`inline-flex items-center gap-1.5 px-2.5 py-2 text-xs font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 shadow-xs ${
+              snapshotMode === 'crop'
+                ? 'border-blue-500 bg-blue-600 text-white'
+                : 'border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Crop
+              className={`w-3.5 h-3.5 shrink-0 ${
+                snapshotMode === 'crop'
+                  ? 'text-white'
+                  : 'text-blue-600 dark:text-blue-400'
+              }`}
+            />
+            <span className="hidden lg:inline">Area Snap</span>
+          </button>
 
-          {secondaryNavItems.map((item) => {
-            const active = activeNav === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setActiveNav(item.id)}
-                className={`relative flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-xl transition-all whitespace-nowrap shrink-0 ${
-                  active
-                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-semibold'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-white/50 dark:hover:bg-slate-900/50'
-                }`}
-              >
-                <span className={active ? 'text-emerald-600 dark:text-emerald-400' : ''}>
-                  {item.icon}
-                </span>
-                <span>{item.shortLabel}</span>
-                {item.badge !== undefined && (
-                  <span
-                    className={`ml-0.5 font-mono text-[9px] font-bold tabular-nums px-1.5 py-0.2 rounded-full ${
-                      active
-                        ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
-                        : 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400 border border-amber-200/50 dark:border-amber-900/50'
-                    }`}
-                  >
-                    {item.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
+          <PWAInstallButton />
 
-        {/* Right Zone */}
-        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => syncFromLiveCloud(false)}
@@ -1974,7 +1960,7 @@ export default function App() {
             className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 shadow-xs disabled:opacity-50"
           >
             <Cloud className={`w-3.5 h-3.5 text-emerald-600 ${isSyncingCloud ? 'animate-pulse' : ''}`} />
-            <span className="hidden md:inline">{isSyncingCloud ? 'Syncing...' : 'Refresh Live'}</span>
+            <span className="hidden lg:inline">{isSyncingCloud ? 'Syncing...' : 'Refresh Live'}</span>
           </button>
 
           {isAdmin && (
@@ -2078,7 +2064,20 @@ export default function App() {
             </span>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0" data-snapshot-ignore="true">
+            <button
+              type="button"
+              onClick={() => setHoverSnapEnabled((prev) => !prev)}
+              title="Toggle instant Copy / PNG / PDF / Excel quick bar when hovering over any card or section"
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                hoverSnapEnabled
+                  ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300'
+                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400'
+              }`}
+            >
+              <Camera className="w-3.5 h-3.5" />
+              Hover Snap: {hoverSnapEnabled ? 'ON' : 'OFF'}
+            </button>
             <button
               type="button"
               onClick={handleTestPopup}
@@ -2641,6 +2640,7 @@ export default function App() {
       {/* Bottom Floating Glass Menu Dock */}
       <nav
         aria-label="Primary Floating Glass Bottom Menu"
+        data-snapshot-ignore="true"
         className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 max-w-[95vw] overflow-x-auto bg-white/65 dark:bg-slate-900/65 backdrop-blur-2xl border border-white/60 dark:border-slate-700/60 shadow-[0_12px_40px_-10px_rgba(15,23,42,0.28)] rounded-2xl p-1.5"
       >
         <div className="flex items-center gap-1">
@@ -2728,6 +2728,18 @@ export default function App() {
           })}
         </div>
       </nav>
+
+      {/* Universal Snapshot & Export Engine (Hover Quick Bar + Pick Section + Freeform Crop + PNG/PDF/XLSX) */}
+      <UniversalSnapshotManager
+        mode={snapshotMode}
+        hoverQuickBarEnabled={hoverSnapEnabled}
+        isDark={isDark}
+        onChangeMode={setSnapshotMode}
+        onNotify={showToast}
+      />
+
+      {/* Offline Connectivity Indicator */}
+      <OfflineIndicator />
 
       {/* Admin Modal */}
       <AdminLoginModal

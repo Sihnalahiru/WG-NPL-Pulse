@@ -1,7 +1,21 @@
 import React, { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import App from './App';
 import './index.css';
+
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  try {
+    registerSW({
+      immediate: true,
+      onRegisterError(error) {
+        console.warn('[WG Pulse PWA] Service worker registration skipped:', error);
+      },
+    });
+  } catch {
+    // Ignore in restricted iframe origins
+  }
+}
 
 interface ErrorBoundaryState {
   hasError: boolean;
